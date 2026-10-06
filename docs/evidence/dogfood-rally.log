@@ -1,0 +1,13 @@
+rally: Claude Code vs Codex, 4 hits
+hit 1/4: ball flying to Claude Code ...
+  hit 1/4 by Claude Code in 59s: Added an idea ledger so a point can only be dropped with a written reason
+hit 2/4: ball flying to Codex ...
+  hit 2/4 by Codex in 124s: Replaced cross-model score ranking with transparent candidate selection and factual match statistics.
+hit 3/4: ball flying to Claude Code ...
+  hit 3/4 by Claude Code in 181s: Added a concrete CLI surface with exit codes, including a blocking `wait` command as the umpire's single polling primitive
+hit 4/4: ball flying to Codex ...
+  hit 4/4 by Codex in 136s: Kept the court, fixed phases, original-input preservation, blocking wait, explicit faults, and deliverable templates.
+status: done
+dir: /private/tmp/pp-live/.ping-pong/20261006-103923-idea-to-refine-the-ping-pong-ag
+final: /private/tmp/pp-live/.ping-pong/20261006-103923-idea-to-refine-the-ping-pong-ag/final.md
+replay: /private/tmp/pp-live/.ping-pong/20261006-103923-idea-to-refine-the-ping-pong-ag/replay.html

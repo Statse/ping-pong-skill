@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ping-pong rally</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;800&family=Atkinson+Hyperlegible:wght@400;700&display=swap">
+<style>
+  :root {
+    --arena: #1d2b44; --arena-2: #26385a; --table: #1f5fa8; --line: #f3f6fb;
+    --red: #c8262f; --rubber: #1e2026; --ball: #f59a23; --ink: #e8eef7; --muted: #9fb0c8;
+    --score: "Big Shoulders Display", "Arial Narrow", Impact, sans-serif;
+    --body: "Atkinson Hyperlegible", system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: radial-gradient(120% 80% at 50% 0%, var(--arena-2), var(--arena) 70%);
+         color: var(--ink); font: 16px/1.55 var(--body); min-height: 100vh; }
+  main { max-width: 1080px; margin: 0 auto; padding: 28px 20px 64px; }
+  h1 { font: 800 clamp(40px, 7vw, 72px)/0.9 var(--score); margin: 0; letter-spacing: 0.01em; }
+  .idea { color: var(--muted); max-width: 70ch; margin: 10px 0 24px; }
+
+  .board { display: grid; grid-template-columns: 1fr auto 1fr; align-items: end; gap: 16px; }
+  .plate { font-family: var(--score); }
+  .plate .name { font-weight: 600; font-size: clamp(18px, 2.6vw, 26px); line-height: 1.1; }
+  .plate .pts { font-weight: 800; font-size: clamp(44px, 7vw, 76px); line-height: 0.9; }
+  .plate.right { text-align: right; }
+  .plate.left .pts { color: var(--red); }
+  .plate.on .name::after { content: " is hitting"; font: 400 14px var(--body); color: var(--muted); }
+  .count { text-align: center; font-family: var(--score); }
+  .count .big { font-weight: 800; font-size: clamp(56px, 10vw, 104px); line-height: 0.85; color: var(--ball); }
+  .count .of { color: var(--muted); font: 400 14px var(--body); }
+
+  svg.court { display: block; width: 100%; height: auto; margin: 6px 0 4px; }
+  .paddle { transition: transform 160ms ease-out; }
+  .dots { display: flex; justify-content: center; gap: 10px; flex-wrap: wrap; margin: 4px 0 28px; }
+  .dot { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--muted); }
+  .dot.done { background: var(--ball); border-color: var(--ball); }
+  .dot.now { border-color: var(--ball); animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse { 50% { transform: scale(1.35); } }
+
+  .status { text-align: center; color: var(--muted); min-height: 1.5em; margin: -16px 0 24px; }
+  .status.err { color: #ff9a9a; }
+
+  section { margin-top: 36px; }
+  h2 { font: 800 30px/1 var(--score); margin: 0 0 14px; }
+  ol.log { list-style: none; padding: 0; margin: 0; display: grid; gap: 14px; }
+  ol.log > li { border-left: 4px solid var(--red); padding: 4px 0 4px 16px; }
+  ol.log > li.r { border-left-color: var(--line); }
+  .who { font: 600 20px var(--score); }
+  .who small { font: 400 14px var(--body); color: var(--muted); margin-left: 8px; }
+  ol.log ul { margin: 6px 0; padding-left: 20px; }
+  details summary { cursor: pointer; color: var(--muted); }
+  details p { white-space: pre-wrap; margin: 6px 0 0; }
+
+  .final { background: rgba(243, 246, 251, 0.06); border-radius: 6px; padding: 20px 22px; }
+  .final pre { white-space: pre-wrap; font: 15px/1.6 var(--body); margin: 0; max-width: 80ch; }
+  .actions { display: flex; gap: 10px; margin-top: 16px; }
+  button { font: 700 15px var(--body); color: var(--arena); background: var(--ball); border: 0;
+           border-radius: 4px; padding: 9px 16px; cursor: pointer; }
+  button.ghost { background: transparent; color: var(--ink); box-shadow: inset 0 0 0 2px var(--muted); }
+  button:focus-visible { outline: 3px solid var(--line); outline-offset: 2px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Ping-pong</h1>
+  <p class="idea" id="idea">Waiting for the serve.</p>
+
+  <div class="board">
+    <div class="plate left" id="plateL"><div class="name" id="nameL">Player 1</div><div class="pts" id="ptsL">0</div></div>
+    <div class="count"><div class="big" id="hitNo">0</div><div class="of" id="hitOf">of 0 hits</div></div>
+    <div class="plate right" id="plateR"><div class="name" id="nameR">Player 2</div><div class="pts" id="ptsR">0</div></div>
+  </div>
+
+  <svg class="court" viewBox="0 0 1000 370" role="img" aria-label="Table tennis table with the idea flying between two paddles">
+    <line x1="0" y1="352" x2="1000" y2="352" stroke="rgba(243,246,251,.15)" stroke-width="2"/>
+    <rect x="200" y="262" width="10" height="90" fill="#3a4a66"/><rect x="790" y="262" width="10" height="90" fill="#3a4a66"/>
+    <rect x="160" y="250" width="680" height="12" fill="var(--table)"/>
+    <line x1="160" y1="250" x2="840" y2="250" stroke="var(--line)" stroke-width="3"/>
+    <rect x="497" y="218" width="6" height="32" fill="var(--line)" opacity=".85"/>
+    <ellipse id="shadow" cx="500" cy="251" rx="10" ry="2.5" fill="#000" opacity="0"/>
+    <g id="padL" class="paddle" style="transform-origin:100px 255px">
+      <rect x="94" y="226" width="12" height="40" rx="4" fill="#b98a5a"/>
+      <ellipse cx="100" cy="196" rx="25" ry="33" fill="var(--red)"/>
+    </g>
+    <g id="padR" class="paddle" style="transform-origin:900px 255px">
+      <rect x="894" y="226" width="12" height="40" rx="4" fill="#b98a5a"/>
+      <ellipse cx="900" cy="196" rx="25" ry="33" fill="var(--rubber)" stroke="var(--red)" stroke-width="2"/>
+    </g>
+    <circle id="ball" cx="500" cy="110" r="8" fill="var(--ball)"/>
+  </svg>
+
+  <div class="dots" id="dots"></div>
+  <p class="status" id="status" aria-live="polite"></p>
+
+  <section id="finalSec" hidden>
+    <h2>Refined idea</h2>
+    <div class="final"><pre id="final"></pre></div>
+    <div class="actions">
+      <button id="copy">Copy refined idea</button>
+      <button id="replay" class="ghost" hidden>Replay rally</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>Rally</h2>
+    <ol class="log" id="log"></ol>
+  </section>
+</main>
+
+<script>
+const EMBEDDED = /*RALLY*/null;
+const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const $ = id => document.getElementById(id);
+const CONTACT = [{x: 134, y: 200}, {x: 866, y: 200}];
+const SERVE = {x: 500, y: 110};
+const TABLE_Y = 242;
+
+let S = null, shown = 0, flight = null, landing = false, replayMode = false, renderedLog = 0;
+let ball = {...SERVE};
+
+function placeBall(p) {
+  ball = p;
+  $("ball").setAttribute("cx", p.x); $("ball").setAttribute("cy", p.y);
+  const over = p.x > 160 && p.x < 840, h = Math.max(0, TABLE_Y - p.y);
+  $("shadow").setAttribute("cx", p.x);
+  $("shadow").setAttribute("rx", Math.max(4, 11 - h / 20));
+  $("shadow").setAttribute("opacity", over ? Math.max(0.08, 0.4 - h / 500) : 0);
+}
+
+function along(f, p) {
+  const to = CONTACT[f.to], from = f.from;
+  const bx = from.x + (to.x - from.x) * 0.7;
+  if (p <= 0.7) {
+    const u = p / 0.7;
+    return {x: from.x + (bx - from.x) * u, y: from.y + (TABLE_Y - from.y) * u - 110 * 4 * u * (1 - u)};
+  }
+  const u = (p - 0.7) / 0.3;
+  return {x: bx + (to.x - bx) * u, y: TABLE_Y + (to.y - TABLE_Y) * u - 55 * Math.sin(Math.PI * u)};
+}
+
+function expectedMs() {
+  if (replayMode) return 700;
+  const hs = S.hits.filter(h => h.seconds);
+  return hs.length ? 1000 * hs.reduce((a, h) => a + h.seconds, 0) / hs.length : 30000;
+}
+
+function startFlight(cur) {
+  flight = {n: cur.n, to: cur.side, from: {...ball}, t0: replayMode ? Date.now() : cur.started_at, exp: expectedMs()};
+}
+
+function swing(side) {
+  const g = side === 0 ? $("padL") : $("padR");
+  g.style.transform = `rotate(${side === 0 ? 28 : -28}deg)`;
+  setTimeout(() => (g.style.transform = ""), 170);
+}
+
+function startLanding() {
+  const hit = S.hits[shown];
+  landing = true;
+  if (!flight || flight.to !== hit.side) flight = {to: hit.side, from: {...ball}, t0: Date.now(), exp: 300};
+  const p0 = currentP(), t0 = performance.now(), dur = reduce ? 0 : 280;
+  const step = now => {
+    const k = dur ? Math.min(1, (now - t0) / dur) : 1;
+    placeBall(along(flight, p0 + (1 - p0) * k));
+    if (k < 1) return requestAnimationFrame(step);
+    swing(hit.side); shown++; flight = null; landing = false;
+    render(); sync();
+  };
+  requestAnimationFrame(step);
+}
+
+function currentP() {
+  if (!flight) return 0;
+  return 0.93 * (1 - Math.exp(-Math.max(0, Date.now() - flight.t0) / flight.exp));
+}
+
+function tick() {
+  if (flight && !landing) placeBall(along(flight, reduce ? 0.5 : currentP()));
+  requestAnimationFrame(tick);
+}
+
+function sync() {
+  if (!S || landing) return;
+  if (S.hits.length > shown) return startLanding();
+  if (S.current && (!flight || flight.n !== S.current.n || flight.to !== S.current.side)) startFlight(S.current);
+  if (!S.current) flight = null;
+}
+
+function esc(s) { return String(s).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c])); }
+
+function render() {
+  if (!S) return;
+  const [L, R] = S.players, landed = S.hits.slice(0, shown);
+  $("idea").textContent = S.idea.length > 220 ? S.idea.slice(0, 220) + "…" : S.idea;
+  $("nameL").textContent = L.label; $("nameR").textContent = R.label;
+  $("ptsL").textContent = landed.filter(h => h.side === 0).length;
+  $("ptsR").textContent = landed.filter(h => h.side === 1).length;
+  $("hitNo").textContent = shown; $("hitOf").textContent = `of ${S.iterations} hits`;
+  const cur = !landing && S.current;
+  $("plateL").classList.toggle("on", !!cur && cur.side === 0);
+  $("plateR").classList.toggle("on", !!cur && cur.side === 1);
+
+  $("dots").innerHTML = Array.from({length: S.iterations}, (_, i) =>
+    `<span class="dot ${i < shown ? "done" : i === shown && S.status === "running" ? "now" : ""}"></span>`).join("");
+
+  for (; renderedLog < shown; renderedLog++) {
+    const h = S.hits[renderedLog];
+    const li = document.createElement("li");
+    if (h.side === 1) li.className = "r";
+    li.innerHTML = `<div class="who">Hit ${h.n}: ${esc(h.player)}<small>${h.seconds} s</small></div>` +
+      (h.changes.length ? `<ul>${h.changes.map(c => `<li>${esc(c)}</li>`).join("")}</ul>` : "") +
+      (h.critique ? `<details><summary>Notes on the incoming version</summary><p>${esc(h.critique)}</p></details>` : "");
+    $("log").prepend(li);
+  }
+
+  const done = S.status !== "running" && shown === S.hits.length;
+  const faults = S.faults || [];
+  let msg = "";
+  if (S.status === "error") msg = `Rally stopped after two faults in a row. Last error: ${faults.at(-1)?.error || "unknown"}`;
+  else if (done) msg = `Rally finished: ${shown} hits.`;
+  else if (cur) msg = `${S.players[cur.side].label} is working on hit ${cur.n}.`;
+  if (faults.length && S.status !== "error") msg += ` ${faults.length} fault${faults.length > 1 ? "s" : ""} so far.`;
+  $("status").textContent = msg;
+  $("status").classList.toggle("err", S.status === "error");
+
+  $("finalSec").hidden = !(done && S.hits.length);
+  if (done && S.hits.length) {
+    $("final").textContent = S.hits.at(-1).version;
+    $("replay").hidden = !EMBEDDED;
+  }
+}
+
+async function poll() {
+  try {
+    const r = await fetch("state.json?t=" + Date.now());
+    if (r.ok) { S = await r.json(); render(); sync(); }
+  } catch (e) { /* server gone after the rally: keep last state */ }
+  if (!S || S.status === "running") setTimeout(poll, 700);
+}
+
+function replay() {
+  const full = EMBEDDED;
+  replayMode = true; shown = 0; renderedLog = 0; flight = null; $("log").innerHTML = "";
+  placeBall({...SERVE});
+  S = {...full, hits: [], status: "running", current: null};
+  let i = 0;
+  const next = () => {
+    if (i >= full.hits.length) { S = {...full, current: null}; render(); sync(); return; }
+    const h = full.hits[i];
+    S = {...S, current: {n: h.n, side: h.side, started_at: Date.now()}};
+    render(); sync();
+    setTimeout(() => { S = {...S, hits: full.hits.slice(0, ++i)}; sync(); setTimeout(next, 450); }, reduce ? 200 : 1300);
+  };
+  next();
+}
+
+$("copy").onclick = () => navigator.clipboard.writeText($("final").textContent).then(() => {
+  $("copy").textContent = "Copied"; setTimeout(() => ($("copy").textContent = "Copy refined idea"), 1500);
+});
+$("replay").onclick = replay;
+
+placeBall({...SERVE});
+requestAnimationFrame(tick);
+if (EMBEDDED) replay(); else poll();
+</script>
+</body>
+</html>
