@@ -33,4 +33,4 @@ Without `--players`, the script detects CLIs first (Claude, Codex, Cursor, OpenC
 
 ## Testing
 
-`mock:<name>` returns canned replies after a short delay. Use it to preview the court.
+`mock:<name>` returns canned replies after a short delay. Use it to test the rally or the optional pixel animation.

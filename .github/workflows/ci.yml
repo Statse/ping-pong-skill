@@ -1,0 +1,27 @@
+name: Python portability
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ['3.9', '3.12']
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    env:
+      PYTHONUTF8: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Enforce Python 3.9 source compatibility
+        run: python -m unittest discover -s tests -p test_compatibility.py -v
+      - name: Engine, animation preferences, and process cleanup
+        run: python -m unittest discover -s tests -p "test_*.py" -v

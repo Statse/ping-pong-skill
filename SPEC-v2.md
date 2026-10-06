@@ -3,6 +3,8 @@
 A ticket-ready spec for the next version of the `ping-pong` agent skill. Shaped as vertical slices so
 `/to-tickets` or `/to-issues` can cut it directly.
 
+Display requirements were replaced on 2026-10-06 by [#16](https://github.com/Statse/ping-pong-skill/issues/16). Engine features below remain planned unless noted in `HANDOVER.md`.
+
 Scope decisions taken by the owner during this refinement are listed under
 [Decisions](#decisions-taken-in-this-refinement). Everything here is bounded by the original
 constraints: **stdlib Python only, no installs, `SKILL.md` under ~100 lines, the ping-pong visual stays
@@ -64,7 +66,7 @@ their GUI versions). The agent is the umpire.
 
 1. **Rally** — owner gives an idea and a hit count; umpire picks two players, starts the engine, shows
    the rally, and hands back a deliverable.
-2. **Watch** — owner follows the browser court, or the ASCII frames the umpire pastes in chat, or both.
+2. **Watch (optional)** — two pixel paddles and a ball loop while the rally runs. The owner can disable it persistently or for a single rally. Host-native placement requires an adapter; see #16.
 3. **Interject** — owner answers an open question or adds a constraint mid-rally; the next hit must
    honour it.
 4. **Recover** — a player faults, the owner cancels, or the machine sleeps; the rally resumes or ends
@@ -76,19 +78,23 @@ their GUI versions). The agent is the umpire.
 
 ```
 ping-pong/
-  SKILL.md          ≤100 lines, 7 steps, unchanged shape
-  PLAYERS.md        three players, doctor output, how to override adapters
-  PROTOCOL.md       new: the hit contract, the ledger, phases, length budgets
-  OUTPUTS.md        deliverable templates (minor edits)
-  players.json      new: adapter table (argv templates), overridable
+  SKILL.md          ≤100 lines, baseline workflow
+  PLAYERS.md        player selection
+  DISPLAY.md        optional animation and adapter contract
+  OUTPUTS.md        deliverable templates
+  assets/           host-neutral pixel widget and local adapter
   scripts/
-    rally.py        engine + subcommands + frame renderer
-    court.html      live court, served read-only; also the offline replay
+    rally.py        engine and monitoring commands
+    animation.py    preference and optional localhost adapter
 ```
 
-v2 **deletes** `scripts/pet.py`, `scripts/setup_pet.py`, `scripts/opencode-pet.js` and `DISPLAY.md`'s pet
-table. Two artifacts remain: the browser court and the ASCII frame. The frame renderer moves from
-`pet.py --frame` to `rally.py frame`.
+The new display is defined in [#16](https://github.com/Statse/ping-pong-skill/issues/16).
+Two pixel paddles exchange one ball continuously while the rally runs; it stops on completion,
+failure, cancellation or disconnection. A persistent off preference and a per-run off flag are
+required. Respect reduced motion. The display is independent of player turns and model choices.
+Do not add scores, transcript panels, replay, automatic browser launch, statusline replacement or
+host configuration installers. A host that cannot embed it runs the rally without it.
+
 
 ### Players
 
@@ -106,7 +112,7 @@ about one idea, not two vendors. `cli:claude` vs `cli:claude`, or `cli:claude:op
 `cli:claude:sonnet`, is a first-class configuration — not a degraded fallback. This drops the v1
 "different LLMs" promise, and with it the entire vendor-distinctness problem.
 
-Vendor is still *recorded* where it is knowable, because it is useful information on the court and in
+Vendor is still *recorded* where it is knowable, because it is useful information in the rally state and in
 `final.md`. It is never a requirement and never a warning. `cursor-agent --list-models` on this machine
 offers `gpt-5.3-codex*`, `gpt-5.2`, `claude-*`, `cursor-grok-4.5-*`, `gemini-3.7-flash-high` and
 `composer-2.5`, so an owner who *wants* vendor variety can pin it; `doctor --models` lists what is
@@ -128,34 +134,20 @@ blocks on, and it makes the umpire's polling event-driven instead of a one-minut
 Ordered. Each is thin, end-to-end and demoable on its own. Every slice must keep the mock rally green:
 `rally.py --idea "test" -n 4 --players mock:left,mock:right`.
 
-### 1. Watchable rally, event-driven — delivers: the umpire stops guessing when to look — depends on: none
+### 1. Event-driven monitoring and optional animation — depends on: none
 
-The whole display path, with no change to the hit protocol.
-
-- `events.jsonl`, appended before `state.json` is replaced, so a reader never sees an event for a state
-  that is not on disk yet.
-- `rally.py wait [--dir D] [--after N] [--timeout S]` blocks until the next event after cursor `N`,
-  prints the ASCII frame plus a one-line event summary, and exits: `0` new event, `2` timeout,
-  `1` rally ended in error. Default `--timeout 180`.
-- `rally.py frame [--dir D]` — v1's `pet.py --frame`, moved. Shows score, ball, phase, elapsed, last
-  change, and the new drift line once slice 2 lands.
-- Court served on a free port (`bind to :0`, print the real URL); `--port` still honoured and still
-  127.0.0.1-only, GET-only.
-- `--linger` default 4 s → 300 s, and the final output names `replay.html` as the offline artifact.
-- Remove the Google Fonts `<link>` from `court.html` so `replay.html` is genuinely offline; fall back to
-  the existing system font stack.
-- `--no-browser` becomes automatic when there is no display (no `DISPLAY`/`WAYLAND_DISPLAY` on Linux,
-  `SSH_CONNECTION` set).
+- `state.json` is replaced atomically before the corresponding event is appended to `events.jsonl`.
+- `rally.py wait [--dir D] [--after N] [--timeout S]` returns the next event after cursor N.
+  Exit 0 for an event, 2 on timeout, 1 for a terminal error or unreadable rally. Print a plain status
+  line plus the event ID and summary. No cursor on a finished rally returns its terminal event.
+- `rally.py status [--dir D]` prints the current state as plain text.
+- Animation is a separate optional adapter; see #16 and `ping-pong/DISPLAY.md`.
 
 **Acceptance**
-- A 4-hit mock rally: `wait` returns once per event, in order, with no gaps and no repeats, when called
-  in a loop with `--after` from the previous call.
-- Two rallies start concurrently without a port collision; both courts load.
-- `replay.html` opened from `file://` with networking disabled renders fully, auto-plays the replay, and
-  the copy button works.
-- `wait` on a finished rally returns immediately with the `done` event; on a rally dir that does not
-  exist, exits non-zero with a clear message.
-- `wait --timeout 1` on a mid-hit rally exits 2 and prints a frame anyway.
+- Four-hit mock rally events are ordered, without gaps or repeats when advancing the cursor.
+- State matching each published event is already readable.
+- Missing directories produce clear errors; a one-second timeout returns 2 with current status.
+- Animation lifecycle and preference tests pass independently of rally content.
 
 ### 2. The idea stops drifting — delivers: refinement instead of rewriting — depends on: 1
 
@@ -169,7 +161,7 @@ The core fix, aimed straight at the measured 0–1 % line retention and 4.5× gr
   installs; `SKILL.md` ≤100 lines; keep the ping-pong visual.
 - The reply envelope gains `decisions`: a list of `{op: "add"|"drop", id?, text?, reason?}`. A `drop`
   without a reason is rejected. A `drop` of an `O-*` entry is **refused** by the engine and recorded as a
-  dispute, which surfaces in the court and in `final.md`.
+  dispute, which surfaces in `state.json` and in `final.md`.
 - **Length budget.** Each prompt states a hard character budget for `version`, derived from the length of
   the version it received: open ≤ 1.6×, deepen ≤ 1.3×, close ≤ 1.0×. The close phase must not grow at
   all.
@@ -177,19 +169,17 @@ The core fix, aimed straight at the measured 0–1 % line retention and 4.5× gr
   the instruction to cut, then accept with `over_budget: true` flagged in state. A let is not a fault and
   does not count toward the fault limit.
 - **Drift telemetry.** The engine computes, per hit, `lines_kept` (share of the incoming version's
-  >20-char lines present verbatim) and `size_ratio`, and stores them in `state.json`. The frame and the
-  court show them ("rewrote 99 % of lines"). This is how the fix gets verified in the wild, not just in
+  >20-char lines present verbatim) and `size_ratio`, and stores them in `state.json`. The final artifact reports them ("rewrote 99 % of lines"). This is how the fix gets verified in the wild, not just in
   tests.
 - The close-phase prompt adds: preserve the exact wording of any section you are not improving.
-- **Scoreboard becomes honest.** Court points per player = that player's `P-*` ledger entries still
-  standing. v1's points (hits taken) were meaningless, since both players always take the same number.
+
 
 **Acceptance**
 - A scripted mock that tries to drop `O-1` gets the drop refused, the rally continues, and the dispute
-  appears in `state.json`, the court and `final.md`.
+  appears in `state.json` and `final.md`.
 - A scripted mock that returns a close-phase version 50 % longer than its input triggers exactly one let,
   then the hit is accepted with `over_budget: true`.
-- `lines_kept` and `size_ratio` are present for every hit in `state.json` and rendered in `rally.py frame`.
+- `lines_kept` and `size_ratio` are present for every hit in `state.json` and available for final-artifact reporting.
 - Re-run of the dogfood rally (same idea, 4 hits, claude vs codex): median `lines_kept` is materially
   above the measured 0–1 % baseline, and the final version is no longer than the version at hit 3.
   Record the new numbers in `docs/evidence/`.
@@ -219,7 +209,7 @@ The core fix, aimed straight at the measured 0–1 % line retention and 4.5× gr
 
 **Acceptance**
 - Mocks for each fault class: each produces the documented action, the right `events.jsonl` entry, and
-  the right court symbol.
+  a clear error report.
 - A mock returning prose instead of JSON never becomes a `version`; it produces a fault and a retry.
 - Kill the engine mid-hit, then `resume`: completed hits appear exactly once, the ledger is intact, and
   the abandoned hit is labelled, not counted.
@@ -247,7 +237,7 @@ The core fix, aimed straight at the measured 0–1 % line retention and 4.5× gr
 - **Vendor is information, not a constraint.** Recorded as `anthropic`/`openai` for
   `cli:claude`/`cli:codex`, and for `cli:cursor` derived from the model name (`claude-*` → anthropic,
   `gpt-*`/`*codex*` → openai, `*grok*` → xai, `gemini-*` → google, `composer-*`/`auto` → unknown). Shown
-  on the court and in `final.md`. Never gates a rally.
+  in the rally state and in `final.md`. Never gates a rally.
 - `doctor --models` lists each tool's available models, so an owner who wants vendor variety or two
   distinct models can pick deliberately.
 - Drop every "two different LLMs" claim from `SKILL.md`, `PLAYERS.md` and the skill description: the
@@ -262,7 +252,7 @@ The core fix, aimed straight at the measured 0–1 % line retention and 4.5× gr
 - A player with a bogus model name fails preflight in under 60 s with a message naming the model and the
   fix; no rally directory is left half-written.
 - A full live rally with `cli:cursor` as one of the two players completes.
-- A full live rally of `cli:claude` against itself completes, and the court labels both players
+- A full live rally of `cli:claude` against itself completes, and the state labels both players
   distinguishably (tool + model + side).
 - With only one CLI on `PATH`, `--list-players` proposes a valid pair and the rally runs; no warning, no
   error.
@@ -307,12 +297,9 @@ The core fix, aimed straight at the measured 0–1 % line retention and 4.5× gr
   they do not vote.
 - `final.md` gains: decisions still standing (per player), disputes, the three question groups, drift and
   size per hit, per-player hit counts, and the rally's wall-clock time.
-- Court gains three read-only panels: ledger (decisions standing, disputes), open questions, and a
-  drift/size meter per hit. Still GET-only, still 127.0.0.1.
 - `OUTPUTS.md`: add a "How this shape was chosen" line to both code templates.
-- **`SKILL.md` rewrite**, still ≤100 lines and still 7 steps, with: `doctor` in step 2, `wait` as the only
-  polling primitive in step 4 (no more "about once a minute"), the inbox offered once in step 4, and the
-  deterministic shape rule in step 6. The pet paragraph is deleted.
+- **`SKILL.md` rewrite**, still ≤100 lines and still 7 steps, with: `doctor` in step 2, `wait` for monitoring in step 4, the inbox offered once in step 4, the optional animation
+  contract in #16, and the deterministic shape rule in step 6.
 - One-line privacy notice before the first serve naming the providers the idea will be sent to, plus an
   offer to add `.ping-pong/` to the repo's `.gitignore`.
 
@@ -323,7 +310,6 @@ The core fix, aimed straight at the measured 0–1 % line retention and 4.5× gr
   does not crash.
 - `SKILL.md` is ≤100 lines, and a fresh agent session following it end-to-end on a mock rally produces a
   `deliverable.md`.
-- The court's three panels render for a finished rally and for one that stopped with faults.
 - `final.md` never loses a decision that no player dropped, proven against the dogfood ledger.
 
 ### 7. Portability floor — delivers: it keeps working on the next machine — depends on: 1
@@ -348,14 +334,14 @@ The core fix, aimed straight at the measured 0–1 % line retention and 4.5× gr
 | Decision | Why |
 |---|---|
 | Players are `cli:claude`, `cli:codex`, `cli:cursor` and `mock:` only | Owner's call. Deletes the four API transports, their key detection, and the whole "default model names go stale" weak spot. All three are testable on this machine. |
-| No pet in v2 | Owner's call: "not just yet, and it needs to be toggleable anyway." Deletes three scripts and the uneven-host problem. Court + frames become the baseline and must be good. |
+| Optional pixel loop | Updated owner decision: two paddles and one ball while the rally runs, with persistent disable. Host-neutral first; #16 supersedes the old display plan. |
 | Play all N hits; the last version wins | Owner's call. No judge model, no self-scoring, no early stop. Convergence is enforced by the per-phase length budget instead, which is deterministic and free. |
 | The JSON reply envelope stays | Tested at 20 KB on two CLIs with zero parse failures. The real bug is accepting an *unparsed* reply as a version. |
 | No `claude --bare` | Tested: it restricts auth to `ANTHROPIC_API_KEY` and fails on a logged-in machine with no key. |
 | No third judge model | Adds a vendor dependency, cost and complexity for a ranking that self-scoring cannot be trusted to produce. |
 | Anti-drift is slice 2, not slice 6 | It is the only measured failure. Everything else on the v1 worry list was speculative. |
 | A rally may use one CLI against itself | Owner's call: the rally is between two agent CLI sessions, not two vendors. Removes the "different LLMs" promise, the vendor-distinctness warnings and the one-CLI dead end. Vendor stays as information only. |
-| `wait` replaces timed polling | The umpire pasting a frame "about once a minute" wastes tokens on unchanged frames and misses fast hits. Events are cheap and exact. |
+| `wait` provides monitoring | The host waits for engine events; the decorative animation does not represent individual turns. |
 | macOS/Linux certified, Windows best-effort in CI | Owner's call. No Windows machine to verify a live rally on, so the claim would be unfounded. |
 | Python 3.9 floor | Verified working; raising it buys nothing. |
 
@@ -379,13 +365,13 @@ Blocking first.
 
 ## Out of scope
 
-- The in-host pet (Claude Code statusline, Cursor footer, OpenCode toasts) — and when it returns it must
-  be a toggle, not a config hijack.
+- Host-specific animation adapters are deferred until their support is investigated. The current
+  task builds a host-neutral component with lifecycle and preference controls.
 - Any player other than Claude Code, Codex and Cursor CLI: no OpenCode, Copilot or Gemini CLI, no direct
   Anthropic/OpenAI/Gemini/OpenRouter API transports.
 - A judge or scoring model; "keep the best version" rather than the last.
 - Convergence-based early stopping.
-- Browser-side controls: the court stays read-only. Control goes through `rally.py` and the chat.
+- Browser controls for running agents. The widget only controls its own animation preference.
 - Verified Windows support, beyond the CI mock rally.
 - Rallying against an existing codebase (a repo context brief for the players).
 - Cost estimation or a price table.

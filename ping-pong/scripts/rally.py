@@ -2,7 +2,7 @@
 """Ping-pong rally: bounce an idea between two LLMs for N hits.
 
 Standard library only. Writes state.json after every hit, serves a live
-court view (court.html) on localhost, and leaves final.md + replay.html.
+optional pixel animation for embedding, and leaves final.md.
 
 Examples:
   rally.py --idea "A habit tracker for bands" --iterations 6
@@ -12,22 +12,20 @@ Examples:
 """
 import argparse
 import datetime
-import functools
-import http.server
 import json
+import math
 import os
 import pathlib
 import random
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 import urllib.error
 import urllib.request
-import webbrowser
 
 HERE = pathlib.Path(__file__).resolve().parent
 API_KINDS = ("anthropic", "openai", "gemini", "openrouter")
@@ -167,12 +165,12 @@ def _api(kind, model, system, user):
 
 def _cli(tool, model, system, user):
     prompt = f"{system}\n\n---\n\n{user}"
-    workdir = tempfile.mkdtemp(prefix="pingpong-")  # keep agent CLIs away from the user's repo
-    out_file = os.path.join(workdir, "last.txt")
-    stdin = None
     exe = cli_bin(tool)
     if not exe:
         raise RuntimeError(f"'{tool}' is not on PATH")
+    workdir = tempfile.mkdtemp(prefix="pingpong-")  # keep agent CLIs away from the user's repo
+    out_file = os.path.join(workdir, "last.txt")
+    stdin = None
     m = lambda flag: [flag, model] if model else []
     if tool == "claude":
         cmd = [exe] + m("--model") + ["-p", prompt]
@@ -188,12 +186,40 @@ def _cli(tool, model, system, user):
         cmd = [exe] + m("-m") + ["-p", prompt]
     else:  # any other command: prompt on stdin, answer on stdout
         cmd, stdin = [exe], prompt
-    p = subprocess.run(cmd, input=stdin, capture_output=True, text=True, cwd=workdir, timeout=1800)
-    if p.returncode != 0:
-        raise RuntimeError(f"{tool} exited {p.returncode}: {(p.stderr or p.stdout)[-400:]}")
-    if tool == "codex" and os.path.exists(out_file):
-        return pathlib.Path(out_file).read_text()
-    return ANSI.sub("", p.stdout)
+    try:
+        p = run_cli(cmd, stdin, workdir, timeout=1800)
+        if p.returncode != 0:
+            raise RuntimeError(f"{tool} exited {p.returncode}: {(p.stderr or p.stdout)[-400:]}")
+        if tool == "codex" and os.path.exists(out_file):
+            return pathlib.Path(out_file).read_text(encoding="utf-8")
+        return ANSI.sub("", p.stdout)
+    finally:
+        shutil.rmtree(workdir)
+
+
+def run_cli(cmd, stdin, workdir, timeout):
+    """On timeout, clean up the CLI's children as well as its main process."""
+    options = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt"
+               else {"start_new_session": True})
+    with subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                          stderr=subprocess.PIPE, text=True, encoding="utf-8",
+                          cwd=workdir, **options) as child:
+        try:
+            stdout, stderr = child.communicate(stdin, timeout=timeout)
+        except (subprocess.TimeoutExpired, KeyboardInterrupt):
+            if os.name == "nt":
+                subprocess.run(["taskkill", "/PID", str(child.pid), "/T", "/F"],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            else:
+                try:
+                    os.killpg(child.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            if child.poll() is None:
+                child.kill()
+            child.communicate()
+            raise
+        return subprocess.CompletedProcess(cmd, child.returncode, stdout, stderr)
 
 
 def _mock(system, user):
@@ -255,7 +281,7 @@ def parse_reply(text):
     fence = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, re.S)
     if fence:
         candidates.append(fence.group(1))
-    if "{" in text:
+    if "{" in text and "}" in text:
         candidates.append(text[text.index("{"): text.rindex("}") + 1])
     for c in candidates:
         try:
@@ -271,90 +297,202 @@ def parse_reply(text):
     return {"critique": "", "version": text.strip(), "changes": [], "open_questions": [], "parsed": False}
 
 
-# ---------------------------------------------------------------- state + court
+# ---------------------------------------------------------------- drift
+
+
+def drift(previous, version):
+    """How much of the incoming version survived into the outgoing one.
+
+    lines_kept is the share of the incoming version's substantial lines kept
+    verbatim; size_ratio is the outgoing length over the incoming length. Both
+    are None on the serve, where there is no incoming version to compare with.
+    """
+    incoming = (previous or "").strip()
+    outgoing = (version or "").strip()
+    if not incoming:
+        return {"lines_kept": None, "size_ratio": None}
+    kept = {line.strip() for line in outgoing.splitlines()}
+    substantial = [line for line in (l.strip() for l in incoming.splitlines()) if len(line) > 20]
+    return {
+        "lines_kept": (round(sum(1 for line in substantial if line in kept) / len(substantial), 3)
+                       if substantial else None),
+        "size_ratio": round(len(outgoing) / len(incoming), 2),
+    }
+
+
+def drift_text(hit):
+    """One hit's drift in plain language, or '' for a hit with nothing to compare."""
+    kept, ratio = hit.get("lines_kept"), hit.get("size_ratio")
+    if ratio is None:
+        return ""
+    parts = []
+    if kept is not None:
+        parts.append(f"rewrote {round((1 - kept) * 100)} % of lines")
+    parts.append(f"{ratio:.2f}x the length")
+    return ", ".join(parts)
+
+
+# ---------------------------------------------------------------- state + events
 
 
 class Rally:
-    def __init__(self, idea, total, players, out):
+    def __init__(self, idea, total, players, out, start=True):
         self.out = out
+        self.started = False
         self.state = {
             "idea": idea, "iterations": total, "players": [p.to_dict() for p in players],
             "hits": [], "faults": [], "current": None, "status": "running",
-            "started_at": _now_ms(), "finished_at": None,
+            "started_at": _now_ms(), "finished_at": None, "event_id": 0,
         }
-        self.save()
+        if start:
+            self.start()
 
-        ACTIVE.parent.mkdir(exist_ok=True)
-        ACTIVE.write_text(json.dumps({"state": str(self.out / "state.json")}))
+    def start(self):
+        # A new rally must not overwrite the state behind an existing event stream.
+        with (self.out / "events.jsonl").open("x", encoding="utf-8"):
+            self.started = True
+        self.save("serve", summary=f"Rally served: {self.state['iterations']} hits")
 
-    def save(self):
+        ACTIVE.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=ACTIVE.parent,
+                                         prefix="active-", delete=False) as f:
+            json.dump({"state": str(self.out / "state.json")}, f)
+        os.replace(f.name, ACTIVE)
+
+    def save(self, event=None, **details):
+        if event:
+            self.state["event_id"] += 1
         tmp = self.out / "state.json.tmp"
-        tmp.write_text(json.dumps(self.state, ensure_ascii=False, indent=1))
+        tmp.write_text(json.dumps(self.state, ensure_ascii=False, indent=1), encoding="utf-8")
         os.replace(tmp, self.out / "state.json")
+        if event:
+            # Publish state first. A reader may see newer state, never older state.
+            entry = {"id": self.state["event_id"], "type": event, "at": _now_ms(), **details}
+            with (self.out / "events.jsonl").open("a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
 def _now_ms():
     return int(time.time() * 1000)
 
 
-def serve(out, port):
-    handler = functools.partial(_QuietHandler, directory=str(out))
-    srv = http.server.ThreadingHTTPServer(("127.0.0.1", port), handler)
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
-    return srv
+def load_state(directory=None):
+    path = (pathlib.Path(directory) / "state.json" if directory else
+            pathlib.Path(json.loads(ACTIVE.read_text(encoding="utf-8"))["state"]))
+    return path.parent, json.loads(path.read_text(encoding="utf-8"))
 
 
-class _QuietHandler(http.server.SimpleHTTPRequestHandler):
-    def log_message(self, *a):
-        pass
-
-    def end_headers(self):
-        self.send_header("Cache-Control", "no-store")
-        super().end_headers()
+def status_text(state):
+    line = f"Rally {state['status']}: {len(state['hits'])}/{state['iterations']} turns completed."
+    measured = drift_text(state["hits"][-1]) if state["hits"] else ""
+    return f"{line} Last hit {measured}." if measured else line
 
 
-class Ticker:
-    """Terminal ball flying between paddles while a player thinks."""
-    W = 34
+def wait_for_event(directory=None, after=None, timeout=180):
+    """Return one event, its latest committed state, and the command exit code.
 
-    def __init__(self, players):
-        self.players, self.stop_evt, self.thread = players, threading.Event(), None
-        self.tty = sys.stdout.isatty()
+    An explicit cursor drains the log in order. With no cursor, a running rally
+    starts at the serve; a finished rally immediately reports its terminal event.
+    """
+    out, state = load_state(directory)
+    log = out / "events.jsonl"
+    if not log.is_file():
+        raise ValueError(f"No event log in {out}; start a new rally with this version.")
+    deadline = time.monotonic() + timeout
+    while True:
+        # Read the log first and state second: every complete line refers to an
+        # already-published state revision. Ignore an in-progress final line.
+        with log.open("rb") as f:
+            events = [json.loads(line.decode("utf-8")) for line in f if line.endswith(b"\n")]
+        _, state = load_state(out)
+        events = [e for e in events if e["id"] <= state.get("event_id", 0)]
+        candidates = [e for e in events if e["id"] > (after or 0)]
+        if after is None and state["status"] != "running":
+            candidates = [e for e in candidates if e["type"] in ("done", "error", "stopped")]
+        if candidates:
+            event = candidates[0]
+            return event, state, 1 if event["type"] == "error" else 0
+        if time.monotonic() >= deadline:
+            return None, state, 2
+        time.sleep(min(0.1, max(0, deadline - time.monotonic())))
 
+
+def watch_command(command, argv):
+    ap = argparse.ArgumentParser(prog=f"rally.py {command}")
+    ap.add_argument("--dir", help="rally directory (default: active rally)")
+    if command == "wait":
+        ap.add_argument("--after", type=int, help="last event ID; use 0 to read from the serve")
+        ap.add_argument("--timeout", type=float, default=180, help="seconds to wait (default 180)")
+    args = ap.parse_args(argv)
+    if command == "wait" and (args.timeout < 0 or not math.isfinite(args.timeout)
+                               or (args.after is not None and args.after < 0)):
+        ap.error("--after and --timeout must be non-negative; timeout must be finite")
+    try:
+        if command == "status":
+            _, state = load_state(args.dir)
+            print(status_text(state))
+            return 0
+        event, state, code = wait_for_event(args.dir, args.after, args.timeout)
+        print(status_text(state))
+        if event:
+            summary = " ".join(event.get("summary", "").split())
+            print(f"event {event['id']}: {event['type']} | {summary}")
+        else:
+            print(f"timeout: no event after {args.after or 0}")
+        return code
+    except (OSError, ValueError, KeyError) as exc:
+        print(f"Cannot read rally: {exc}", file=sys.stderr)
+        return 1
+
+
+def doctor(argv):
+    """Local availability floor; authenticated probes and caching land in #10."""
+    ap = argparse.ArgumentParser(prog="rally.py doctor", description="Check installed player CLIs.")
+    ap.parse_args(argv)
+    found = [(tool, cli_bin(tool)) for tool in ("claude", "codex", "cursor")]
+    for tool, binary in found:
+        print(f"{tool}: {binary or 'not found'}")
+    if not any(binary for _, binary in found):
+        print("No player CLIs found on PATH. Set up Claude Code, Codex, or Cursor; see PLAYERS.md.",
+              file=sys.stderr)
+        return 1
+    print("Availability only; authentication and model access have not been checked.")
+    return 0
+
+
+class Progress:
+    """Plain process log; visual activity belongs to the optional widget."""
     def fly(self, n, total, side, expected_s):
-        a, b = self.players[0].label[:14], self.players[1].label[:14]
-        hitter = self.players[side].label
-        if not self.tty:
-            print(f"hit {n}/{total}: ball flying to {hitter} ...", flush=True)
-            return
-        self.stop_evt.clear()
+        print(f"turn {n}/{total}: player {side + 1} working ...", flush=True)
 
-        def run():
-            t0 = time.time()
-            while not self.stop_evt.is_set():
-                p = min(0.95, 1 - 2.71828 ** (-(time.time() - t0) / expected_s))
-                x = int((p if side == 1 else 1 - p) * (self.W - 1))
-                lane = "".join("o" if i == x else ("|" if i == self.W // 2 else "·") for i in range(self.W))
-                sys.stdout.write(f"\r{a:>14} ▌{lane}▐ {b:<14}  hit {n}/{total}  {int(time.time()-t0)}s ")
-                sys.stdout.flush()
-                time.sleep(0.12)
-        self.thread = threading.Thread(target=run, daemon=True)
-        self.thread.start()
-
-    def land(self, msg):
-        if self.thread:
-            self.stop_evt.set()
-            self.thread.join()
-            self.thread = None
-            sys.stdout.write("\r" + " " * 100 + "\r")
-        print(msg, flush=True)
+    def land(self, message):
+        print(message, flush=True)
 
 
 # ---------------------------------------------------------------- main loop
 
 
 def play(idea, total, players, out, ticker):
-    rally = Rally(idea, total, players, out)
+    rally = Rally(idea, total, players, out, start=False)
+    try:
+        rally.start()
+        return play_turns(rally, idea, total, players, ticker)
+    except KeyboardInterrupt:
+        if not rally.started:
+            raise
+        rally.state.update(status="stopped", current=None, finished_at=_now_ms())
+        rally.save("stopped", summary="Rally cancelled")
+        return rally
+    except Exception:
+        if not rally.started:
+            raise
+        rally.state.update(status="error", current=None, finished_at=_now_ms())
+        rally.save("error", summary="Rally interrupted by an engine error")
+        write_outputs(rally)
+        raise
+
+
+def play_turns(rally, idea, total, players, ticker):
     prev, side, durations, consecutive_faults = None, 0, [], 0
     n = 1
     while n <= total:
@@ -377,27 +515,32 @@ def play(idea, total, players, out, ticker):
         if reply is None:
             consecutive_faults += 1
             rally.state["faults"].append({"n": n, "side": side, "player": me.label, "error": err})
-            rally.save()
+            rally.save("fault", n=n, side=side, summary=f"{me.label}: {err}")
             ticker.land(f"  fault: {me.label} could not return hit {n}: {err}")
             if consecutive_faults >= 2:
                 rally.state["status"] = "error"
                 rally.state["current"] = None
-                rally.save()
+                rally.state["finished_at"] = _now_ms()
+                rally.save("error", summary="Rally stopped after two consecutive faults")
                 return rally
             side = 1 - side  # opponent takes the hit
             continue
         consecutive_faults = 0
         durations.append(took)
-        hit = {"n": n, "side": side, "player": me.label, "seconds": round(took, 1), **reply}
+        hit = {"n": n, "side": side, "player": me.label, "seconds": round(took, 1), **reply,
+               **drift(prev["version"] if prev else None, reply["version"])}
         rally.state["hits"].append(hit)
-        rally.save()
+        rally.state["current"] = None
+        rally.save("hit", n=n, side=side, summary=f"Hit {n}/{total} by {me.label}")
+        measured = drift_text(hit)
         ticker.land(f"  hit {n}/{total} by {me.label} in {took:.0f}s"
-                    + (f": {hit['changes'][0]}" if hit["changes"] else ""))
+                    + (f": {hit['changes'][0]}" if hit["changes"] else "")
+                    + (f" [{measured}]" if measured else ""))
         prev, side, n = hit, 1 - side, n + 1
     rally.state["status"] = "done"
     rally.state["current"] = None
     rally.state["finished_at"] = _now_ms()
-    rally.save()
+    rally.save("done", summary=f"Rally finished: {len(rally.state['hits'])} hits")
     return rally
 
 
@@ -415,23 +558,26 @@ def write_outputs(rally):
                  + " and ".join(p["label"] for p in s["players"]) + "."]
         if questions:
             lines += ["", "Open questions raised during the rally:"] + [f"- {q}" for q in questions]
-        (out / "final.md").write_text("\n".join(lines) + "\n")
-    court = (HERE / "court.html").read_text()
-    payload = json.dumps(s, ensure_ascii=False).replace("</", "<\\/")
-    (out / "replay.html").write_text(court.replace("/*RALLY*/null", payload, 1))
+        (out / "final.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def main():
+    from animation import animation_command, animation_enabled, serve_animation
+    if len(sys.argv) > 1 and sys.argv[1] == "animation":
+        return animation_command(sys.argv[2:])
+    if len(sys.argv) > 1 and sys.argv[1] in ("status", "wait"):
+        return watch_command(sys.argv[1], sys.argv[2:])
+    if len(sys.argv) > 1 and sys.argv[1] == "doctor":
+        return doctor(sys.argv[2:])
     ap = argparse.ArgumentParser(description="Bounce an idea between two LLMs.")
     ap.add_argument("--idea", help="the idea as text")
     ap.add_argument("--idea-file", help="read the idea from a file")
     ap.add_argument("-n", "--iterations", type=int, default=6, help="number of hits (default 6)")
     ap.add_argument("--players", help="two comma-separated specs, e.g. cli:claude,cli:codex")
     ap.add_argument("--out", help="rally directory (default ./.ping-pong/<timestamp>-<slug>)")
-    ap.add_argument("--port", type=int, default=8765)
-    ap.add_argument("--no-court", action="store_true", help="skip the live browser view")
-    ap.add_argument("--no-browser", action="store_true", help="serve the court but do not open it")
-    ap.add_argument("--linger", type=int, default=4, help="seconds to keep serving after the rally")
+    display = ap.add_mutually_exclusive_group()
+    display.add_argument("--animation", action="store_true", help="expose the embeddable pixel widget locally")
+    display.add_argument("--no-animation", action="store_true", help="disable animation for this rally")
     ap.add_argument("--list-players", action="store_true")
     a = ap.parse_args()
 
@@ -441,7 +587,7 @@ def main():
         print("auto pick:", ", ".join(auto_pick(found)) or "none")
         return 0
 
-    idea = pathlib.Path(a.idea_file).read_text() if a.idea_file else a.idea
+    idea = pathlib.Path(a.idea_file).read_text(encoding="utf-8") if a.idea_file else a.idea
     if not idea or not idea.strip():
         ap.error("give --idea or --idea-file")
     if a.iterations < 1:
@@ -455,33 +601,38 @@ def main():
 
     slug = re.sub(r"[^a-z0-9]+", "-", idea.lower())[:32].strip("-") or "idea"
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-    out = pathlib.Path(a.out or f".ping-pong/{stamp}-{slug}").resolve()
-    out.mkdir(parents=True, exist_ok=True)
-    shutil.copy(HERE / "court.html", out / "index.html")
-
+    if a.out:
+        out = pathlib.Path(a.out).resolve()
+        out.mkdir(parents=True, exist_ok=True)
+    else:
+        base = pathlib.Path(".ping-pong").resolve()
+        base.mkdir(parents=True, exist_ok=True)
+        out = pathlib.Path(tempfile.mkdtemp(prefix=f"{stamp}-{slug}-", dir=base))
+    if (out / "state.json").exists() or (out / "events.jsonl").exists():
+        ap.error(f"rally already exists in {out}; choose a new --out directory")
     srv = None
-    if not a.no_court:
+    if a.animation and animation_enabled():
         try:
-            srv = serve(out, a.port)
-            url = f"http://127.0.0.1:{a.port}/"
-            print(f"court: {url}", flush=True)
-            if not a.no_browser:
-                webbrowser.open(url)
-        except OSError as e:
-            print(f"court unavailable ({e}); continuing without it", flush=True)
+            srv = serve_animation(out)
+            print(f"animation: http://127.0.0.1:{srv.server_port}/", flush=True)
+        except OSError as exc:
+            print(f"Animation unavailable ({exc}); rally continues.", file=sys.stderr)
 
     print(f"rally: {players[0].label} vs {players[1].label}, {a.iterations} hits", flush=True)
-    rally = play(idea.strip(), a.iterations, players, out, Ticker(players))
-    write_outputs(rally)
-    print(f"status: {rally.state['status']}")
-    print(f"dir: {out}")
-    if (out / "final.md").exists():
-        print(f"final: {out / 'final.md'}")
-    print(f"replay: {out / 'replay.html'}")
-    if srv:
-        time.sleep(a.linger)
-        srv.shutdown()
-    return 0 if rally.state["status"] == "done" else 1
+    print(f"dir: {out}", flush=True)
+    previous_term = signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
+    try:
+        rally = play(idea.strip(), a.iterations, players, out, Progress())
+        write_outputs(rally)
+        print(f"status: {rally.state['status']}", flush=True)
+        if (out / "final.md").exists():
+            print(f"final: {out / 'final.md'}", flush=True)
+        return 0 if rally.state["status"] == "done" else 130 if rally.state["status"] == "stopped" else 1
+    finally:
+        signal.signal(signal.SIGTERM, previous_term)
+        if srv:
+            srv.shutdown()
+            srv.server_close()
 
 
 if __name__ == "__main__":
