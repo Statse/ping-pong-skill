@@ -1,3 +1,4 @@
 .ping-pong/
 __pycache__/
 *.pyc
+dist/
