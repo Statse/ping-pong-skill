@@ -259,8 +259,10 @@ python3 -m unittest discover -s tests -v     # credential-free; ~20 s
 ```
 
 The engine stays Python 3.9-compatible and standard-library-only; CI runs 3.9 and 3.12 across Linux,
-macOS and Windows. `tests/test_compatibility.py` guards the version floor. Roadmap and slice-by-slice
-acceptance criteria live in [SPEC-v2.md](SPEC-v2.md) and the repository's
-[issues](https://github.com/Statse/ping-pong-skill/issues).
+macOS and Windows (mock rally + `doctor` with an empty PATH + the unit suite). Windows is
+best-effort until a live rally is verified there. Prefer `rally.py wait --timeout N` over the shell
+`timeout(1)` utility — it is absent on macOS. `tests/test_compatibility.py` guards the version
+floor. Roadmap and slice-by-slice acceptance criteria live in [SPEC-v2.md](SPEC-v2.md) and the
+repository's [issues](https://github.com/Statse/ping-pong-skill/issues).
 
 Created in [T3 Code](https://t3.codes).

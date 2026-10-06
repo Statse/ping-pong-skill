@@ -240,6 +240,16 @@ class ProcessTests(unittest.TestCase):
         self.assertIn('No player CLIs', result.stderr)
         self.assertNotIn('Traceback', result.stderr)
 
+    def test_format_command_is_windows_safe(self):
+        argv = ['tool', 'arg with spaces', 'quote"me']
+        rendered = rally.format_command(argv)
+        self.assertIsInstance(rendered, str)
+        self.assertTrue(rendered)
+        if os.name == 'nt':
+            self.assertEqual(rendered, subprocess.list2cmdline(argv))
+        else:
+            self.assertIn('arg with spaces', rendered)
+
     def test_cli_timeout_kills_process_tree(self):
         with tempfile.TemporaryDirectory() as directory:
             marker = Path(directory) / 'should-not-exist'
