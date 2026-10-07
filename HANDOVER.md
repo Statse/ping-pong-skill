@@ -51,7 +51,8 @@ The failure was an incomplete reconciliation: `play_turns()` called a missing
 implementations were recovered from the stash. Regression tests now exercise the actual
 rally flow, not just the helper functions.
 
-The original refine worktree is retained as historical WIP. Continue from the recovery
+The original refine worktree is now clean on `recovery/refine-2026-10-07`, preserving
+its historical WIP as a commit. Continue from the recovery
 branch or merged main; do not resume implementation from that stale worktree.
 
 ## Remaining work and limits

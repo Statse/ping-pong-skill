@@ -2,10 +2,12 @@
 import contextlib
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -19,6 +21,7 @@ def reply(version='A concise idea'):
 
 class RecoveryTests(unittest.TestCase):
     def setUp(self):
+        self.real_sleep = time.sleep
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.directory = Path(temporary.name)
@@ -121,6 +124,46 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn('active engine', result.stderr)
         self.assertEqual((self.directory / 'state.json').read_bytes(), before)
+
+    def test_process_crash_resume_keeps_completed_hits_and_releases_lock(self):
+        output = self.directory / 'crashed-run'
+        environment = dict(os.environ, HOME=str(self.directory), USERPROFILE=str(self.directory))
+        process = subprocess.Popen(
+            [sys.executable, str(SCRIPT), '--idea', 'A small idea', '-n', '2',
+             '--players', 'mock:left,mock:right', '--no-animation', '--out', str(output)],
+            env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        # Poll with real time while the subprocess runs independently of patched sleeps.
+        with patch.object(rally.time, 'sleep', wraps=self.real_sleep):
+            try:
+                deadline = time.monotonic() + 15
+                while time.monotonic() < deadline:
+                    if (output / 'state.json').exists():
+                        state = rally.load_state(output)[1]
+                        if len(state['hits']) == 1 and (state.get('current') or {}).get('n') == 2:
+                            break
+                    if process.poll() is not None:
+                        self.fail('mock engine exited before it could be interrupted')
+                    self.real_sleep(0.05)
+                else:
+                    self.fail('mock engine did not reach the second hit')
+                completed = state['hits'][0]
+                process.kill()
+                process.communicate(timeout=5)
+                result = subprocess.run(
+                    [sys.executable, str(SCRIPT), 'resume', '--dir', str(output)],
+                    env=environment, capture_output=True, text=True, timeout=15)
+                self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+                resumed = rally.load_state(output)[1]
+                self.assertEqual(resumed['hits'][0], completed)
+                self.assertEqual([hit['n'] for hit in resumed['hits']], [1, 2])
+                self.assertEqual(resumed['status'], 'done')
+                events = [json.loads(line) for line in (output / 'events.jsonl').read_text().splitlines()]
+                self.assertEqual([event['type'] for event in events], ['serve', 'hit', 'resume', 'hit', 'done'])
+                self.assertEqual([event['id'] for event in events], [1, 2, 3, 4, 5])
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                process.communicate()
 
     def test_preflight_failure_creates_no_rally(self):
         output = self.directory / 'not-started'
