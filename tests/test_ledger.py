@@ -330,6 +330,42 @@ class LedgerRallyTests(unittest.TestCase):
                          ['an added decision needs text',
                           'owner non-negotiables cannot be dropped'])
 
+    def test_hit_event_is_published_against_state_that_has_its_decisions(self):
+        """No window where a completed hit is durable but its decisions are not."""
+        self.constraints('Keep the engine standard library only')
+        scripted = [
+            reply('v1', [{'op': 'add', 'text': 'One JSON envelope for every reply'},
+                         {'op': 'drop', 'id': 'O-1', 'reason': 'a dependency would be faster'}]),
+            reply('v2'),
+        ]
+        original_open = Path.open
+        observed = []
+
+        def observe(path, mode='r', *args, **kwargs):
+            if path.name == 'events.jsonl' and mode == 'a':
+                observed.append(json.loads(
+                    (self.directory / 'state.json').read_text(encoding='utf-8')))
+            return original_open(path, mode, *args, **kwargs)
+
+        with patch.object(rally.Player, 'call', side_effect=scripted), \
+                patch.object(Path, 'open', observe):
+            game = self.play(2)
+        self.assertEqual(game.state['status'], 'done')
+        self.assertEqual([event['type'] for event in self.events()],
+                         ['serve', 'hit', 'ledger', 'hit', 'done'])
+        # observed[i] is the state already on disk when event i + 1 was appended.
+        serve, first_hit = observed[0], observed[1]
+        self.assertEqual([e['id'] for e in serve['ledger']], ['O-1'])
+        self.assertEqual(serve['disputes'], [])
+        self.assertEqual(len(first_hit['hits']), 1)
+        self.assertEqual([e['id'] for e in first_hit['ledger']], ['O-1', 'P-1'])
+        self.assertEqual([d['id'] for d in first_hit['disputes']], ['O-1'])
+        self.assertEqual(first_hit['event_id'], 2)
+        # The ledger event never precedes the state that explains it.
+        self.assertEqual(observed[2]['ledger'], first_hit['ledger'])
+        self.assertEqual(observed[2]['event_id'], 3)
+        self.assertEqual([state['event_id'] for state in observed], [1, 2, 3, 4, 5])
+
     def test_status_line_surfaces_the_standing_ledger_size(self):
         self.constraints('Keep it small')
         with patch.object(rally.Player, 'call',

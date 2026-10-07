@@ -41,8 +41,10 @@ motion is respected. Native host adapters remain deferred. See `ping-pong/DISPLA
   player entries only, with an explicit cap-exception line when owner entries overflow.
   Eviction is rendering-only; state keeps everything. Refused and rejected operations
   (owner drops, reasonless drops, unknown or already-dropped ids, text-less adds) become
-  disputes and never fault or end the rally. Each hit that changes the ledger appends one
-  `ledger` event. Resume preserves the stored ledger and does not re-seed it.
+  disputes and never fault or end the rally. A hit's ledger changes are written into the
+  same atomic state revision as the hit itself, so a crash cannot keep a completed hit
+  while losing its decisions; the separate `ledger` event is appended afterwards, once
+  per hit that changed anything. Resume preserves the stored ledger and does not re-seed it.
   `final.md` lists standing decisions, dropped ones with reasons, and disputes;
   `status` reports the standing count.
 - Resume keeps completed hits and event IDs. An OS lock prevents simultaneous engines

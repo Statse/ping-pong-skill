@@ -767,12 +767,14 @@ def play_turns(rally, idea, total, players, ticker):
         rally.state["hits"].append(hit)
         rally.state["current"] = None
         rally.state["next_side"] = 1 - side
-        rally.save("hit", n=n, side=side, summary=f"Hit {n}/{total} by {me.label}")
+        # Fold this hit's ledger changes into the same atomic write as the hit, so a
+        # crash can never leave a completed hit whose decisions were not recorded.
         applied = apply_decisions(rally, n, me.label, reply.get("decisions"))
-        if applied["disputed"]:
-            for record in applied["disputed"]:
-                ticker.land("  ledger: refused {0} of {1} ({2})".format(
-                    record["op"], record["id"] or "an entry", record["refused"]))
+        rally.save("hit", n=n, side=side, summary=f"Hit {n}/{total} by {me.label}")
+        save_ledger_event(rally, applied)
+        for record in applied["disputed"]:
+            ticker.land("  ledger: refused {0} of {1} ({2})".format(
+                record["op"], record["id"] or "an entry", record["refused"]))
         measured = drift_text(hit)
         ticker.land(f"  hit {n}/{total} by {me.label} in {took:.0f}s"
                     + (f": {hit['changes'][0]}" if hit["changes"] else "")
@@ -810,8 +812,10 @@ def next_player_id(ledger):
 
 
 def apply_decisions(rally, n, player, decisions):
-    """Record one hit's ledger operations. Nothing here faults or ends the rally.
+    """Apply one hit's ledger operations to state. Nothing here faults the rally.
 
+    This only mutates state, so the caller can fold the changes into the same
+    atomic write as the hit itself and then announce them with save_ledger_event.
     Refused and rejected operations become disputes so the owner can see what a
     player wanted to remove; the targeted entry itself is left untouched.
     """
@@ -852,12 +856,18 @@ def apply_decisions(rally, n, player, decisions):
             entry["reason"] = reason
             dropped.append(target)
 
-    if added or dropped or refused:
-        summary = "Ledger after hit %d: %d added, %d dropped, %d disputed" % (
-            n, len(added), len(dropped), len(refused))
-        rally.save("ledger", n=n, summary=summary, added=added, dropped=dropped,
-                   disputed=[dict(record) for record in refused])
-    return {"added": added, "dropped": dropped, "disputed": refused}
+    return {"n": n, "added": added, "dropped": dropped, "disputed": refused}
+
+
+def save_ledger_event(rally, applied):
+    """Announce ledger changes already written into state by apply_decisions."""
+    if not (applied["added"] or applied["dropped"] or applied["disputed"]):
+        return
+    summary = "Ledger after hit %d: %d added, %d dropped, %d disputed" % (
+        applied["n"], len(applied["added"]), len(applied["dropped"]), len(applied["disputed"]))
+    rally.save("ledger", n=applied["n"], summary=summary, added=applied["added"],
+               dropped=applied["dropped"],
+               disputed=[dict(record) for record in applied["disputed"]])
 
 
 def consume_notes(rally):
