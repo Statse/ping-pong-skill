@@ -5,12 +5,13 @@ Standard library only. Writes state.json after every hit, serves a live
 optional pixel animation for embedding, and leaves final.md.
 
 Examples:
-  rally.py --idea "A habit tracker for bands" --iterations 6
+  rally.py --idea "A habit tracker for bands" --iterations 10
   rally.py --idea-file idea.md -n 8 --players cli:claude,cli:codex
   rally.py --idea "test" -n 4 --players mock:left,mock:right     # dry run
   rally.py --list-players
 """
 import argparse
+from contextlib import contextmanager
 import datetime
 import json
 import math
@@ -148,6 +149,8 @@ def _api(kind, model, system, user):
                   {"model": model, "max_tokens": 8000, "system": system,
                    "messages": [{"role": "user", "content": user}]},
                   {"x-api-key": key, "anthropic-version": "2023-06-01"})
+        if r.get("stop_reason") == "max_tokens":
+            raise RuntimeError("token limit reached (Anthropic stop_reason=max_tokens)")
         return "".join(b.get("text", "") for b in r["content"] if b.get("type") == "text")
     if kind in ("openai", "openrouter"):
         base = "https://api.openai.com/v1" if kind == "openai" else "https://openrouter.ai/api/v1"
@@ -155,11 +158,15 @@ def _api(kind, model, system, user):
                   {"model": model, "messages": [{"role": "system", "content": system},
                                                 {"role": "user", "content": user}]},
                   {"Authorization": f"Bearer {key}"})
+        if r.get("choices") and r["choices"][0].get("finish_reason") == "length":
+            raise RuntimeError("token limit reached (provider finish_reason=length)")
         return r["choices"][0]["message"]["content"]
     if kind == "gemini":
         r = _post(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}",
                   {"systemInstruction": {"parts": [{"text": system}]},
                    "contents": [{"role": "user", "parts": [{"text": user}]}]}, {})
+        if r.get("candidates") and r["candidates"][0].get("finishReason") == "MAX_TOKENS":
+            raise RuntimeError("token limit reached (Gemini finishReason=MAX_TOKENS)")
         return "".join(p.get("text", "") for p in r["candidates"][0]["content"]["parts"])
     raise RuntimeError(f"no transport for {kind}")
 
@@ -233,11 +240,17 @@ def run_cli(cmd, stdin, workdir, timeout):
 
 
 def _mock(system, user):
+    if "preflight player" in system:
+        return '{"critique":"ok","version":"pong","changes":[],"open_questions":[]}'
     time.sleep(random.uniform(2.5, 5))
     n = re.search(r"hit (\d+) of", system)
+    limit = re.search(r"Maximum version length for this hit: (\d+)", system)
+    budget = int(limit.group(1)) if limit else 1000
+    prefix = f"# Mock version after hit {n.group(1) if n else '?'}\n\n"
+    body = user[-max(0, budget - len(prefix)):]
     return json.dumps({
         "critique": "Mock critique: the core is sound, the audience is fuzzy.",
-        "version": f"# Mock version after hit {n.group(1) if n else '?'}\n\n" + user[-300:],
+        "version": (prefix + body)[:budget],
         "changes": ["Sharpened the audience", "Cut one feature"],
         "open_questions": ["Who pays for this?"],
     })
@@ -245,14 +258,16 @@ def _mock(system, user):
 
 # ---------------------------------------------------------------- prompts
 
-SYSTEM = """You are {me}, playing an idea ping-pong rally against {them}. You take turns improving one idea. This is hit {n} of {total}.
+SYSTEM = """You are {me}, playing an idea ping-pong rally against {them}. You take turns improving one idea. This is hit {n} of {total}; {remaining} iterations remain after this one.
 
 Phase of this hit: {phase}
+Maximum version length for this hit: {budget} characters. Return a concise version within this limit.
 
 How to return the ball:
 - Read the current version and your opponent's notes.
 - Keep what is strong. Name what is weak, vague, risky or missing, and fix it in your version.
 - Refine the current version rather than restarting it; keep concrete details unless you have a reason to drop them.
+- Never silently remove or contradict an explicit owner requirement. If you think one should change, preserve it and report the conflict with a reason for the owner.
 - Your version must stand alone: someone who reads only it gets the whole idea.
 - Write in the language of the owner's original idea.
 
@@ -260,7 +275,8 @@ Reply with only this JSON object:
 {{"critique": "honest, specific notes on the incoming version",
  "version": "the full improved idea, markdown allowed",
  "changes": ["one short line per change you made"],
- "open_questions": ["questions only the idea's owner can answer"]}}"""
+ "open_questions": ["questions only the idea's owner can answer"],
+ "owner_conflicts": [{{"item": "owner requirement", "reason": "why it should change"}}]}}"""
 
 PHASES = {
     "open": "Open up. Challenge assumptions, find the stronger angle, add what is missing.",
@@ -270,14 +286,35 @@ PHASES = {
 
 
 def phase_for(n, total):
-    if n == total:
+    """Scale explore, deepen, and converge phases to the requested count."""
+    if total == 1:
         return "close"
-    frac = (n - 1) / max(total - 1, 1)
-    return "open" if frac < 0.34 else "deepen" if frac < 0.67 else "close"
+    if total == 2:
+        return "open" if n == 1 else "close"
+    open_end = max(1, int(total * 0.30))
+    close_start = max(open_end + 1, total - int(total * 0.30) + 1)
+    if n <= open_end:
+        return "open"
+    if n >= close_start:
+        return "close"
+    return "deepen"
 
 
-def user_prompt(idea, prev, them):
+def remaining_iterations(n, total):
+    return max(0, total - n)
+
+
+def size_budget(phase, incoming_size):
+    """Maximum version size for a phase, measured against the incoming draft."""
+    multiplier = {"open": 1.6, "deepen": 1.3, "close": 1.0}[phase]
+    return max(1, int(incoming_size * multiplier))
+
+
+def user_prompt(idea, prev, them, owner_notes=None):
     head = f"Original idea from the owner:\n\n{idea}\n"
+    if owner_notes:
+        head += "\nOwner notes (these are authoritative and persist for the rest of the rally):\n"
+        head += "\n".join(f"- {note}" for note in owner_notes) + "\n"
     if prev is None:
         return head + "\nYou serve: there is no previous version yet. Write the first version."
     changes = "\n".join(f"- {c}" for c in prev["changes"]) or "- (none listed)"
@@ -301,6 +338,7 @@ def parse_reply(text):
                         "version": str(d["version"]),
                         "changes": [str(x) for x in d.get("changes") or []],
                         "open_questions": [str(x) for x in d.get("open_questions") or []],
+                        "owner_conflicts": [x for x in d.get("owner_conflicts") or [] if isinstance(x, dict)],
                         "parsed": True}
         except (ValueError, TypeError):
             continue
@@ -351,7 +389,8 @@ class Rally:
         self.started = False
         self.state = {
             "idea": idea, "iterations": total, "players": [p.to_dict() for p in players],
-            "hits": [], "faults": [], "current": None, "status": "running",
+            "hits": [], "faults": [], "owner_notes": [], "next_side": 0,
+            "current": None, "status": "running",
             "started_at": _now_ms(), "finished_at": None, "event_id": 0,
         }
         if start:
@@ -363,11 +402,7 @@ class Rally:
             self.started = True
         self.save("serve", summary=f"Rally served: {self.state['iterations']} hits")
 
-        ACTIVE.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=ACTIVE.parent,
-                                         prefix="active-", delete=False) as f:
-            json.dump({"state": str(self.out / "state.json")}, f)
-        os.replace(f.name, ACTIVE)
+        set_active(self.out)
 
     def save(self, event=None, **details):
         if event:
@@ -380,6 +415,14 @@ class Rally:
             entry = {"id": self.state["event_id"], "type": event, "at": _now_ms(), **details}
             with (self.out / "events.jsonl").open("a", encoding="utf-8") as f:
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+def set_active(out):
+    ACTIVE.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=ACTIVE.parent,
+                                     prefix="active-", delete=False) as f:
+        json.dump({"state": str(out / "state.json")}, f)
+    os.replace(f.name, ACTIVE)
 
 
 def _now_ms():
@@ -456,18 +499,44 @@ def watch_command(command, argv):
 
 
 def doctor(argv):
-    """Local availability floor; authenticated probes and caching land in #10."""
+    """Probe both selected players with a small expected-format request."""
     ap = argparse.ArgumentParser(prog="rally.py doctor", description="Check installed player CLIs.")
-    ap.parse_args(argv)
-    found = [(tool, cli_bin(tool)) for tool in ("claude", "codex", "cursor")]
-    for tool, binary in found:
-        print(f"{tool}: {binary or 'not found'}")
-    if not any(binary for _, binary in found):
-        print("No player CLIs found on PATH. Set up Claude Code, Codex, or Cursor; see PLAYERS.md.",
-              file=sys.stderr)
+    ap.add_argument("--players", help="two comma-separated player specs")
+    args = ap.parse_args(argv)
+    specs = [s.strip() for s in args.players.split(",")] if args.players else auto_pick(detect_players())
+    if len(specs) != 2:
+        if not specs:
+            print("No player CLIs or API providers found. Set up two players; see PLAYERS.md.",
+                  file=sys.stderr)
+        else:
+            print("Need exactly two players to preflight; see PLAYERS.md.", file=sys.stderr)
         return 1
-    print("Availability only; authentication and model access have not been checked.")
-    return 0
+    try:
+        players = [Player(spec) for spec in specs]
+    except ValueError as exc:
+        print(f"Invalid player spec: {exc}", file=sys.stderr)
+        return 1
+    return 0 if preflight_players(players) else 1
+
+
+def preflight_players(players):
+    ok = True
+    system = SYSTEM.format(me="preflight player", them="the other player", n=1, total=1,
+                           remaining=0, phase=PHASES["close"], budget=1000)
+    for player in players:
+        try:
+            started = time.monotonic()
+            raw = player.call(system, 'Return this exact JSON: {"critique":"ok","version":"pong","changes":[],"open_questions":[]}')
+            reply = parse_reply(raw)
+            required = ('"critique"', '"version"', '"changes"', '"open_questions"')
+            if (not reply["parsed"] or reply["version"] != "pong"
+                    or not all(key in raw for key in required)):
+                raise RuntimeError("player did not return the expected JSON response")
+            print(f"preflight {player.spec}: ready ({time.monotonic() - started:.1f}s)")
+        except Exception as exc:  # noqa: BLE001 - report setup problems before the rally
+            ok = False
+            print(f"preflight {player.spec}: failed: {exc}", file=sys.stderr)
+    return ok
 
 
 class Progress:
@@ -482,7 +551,39 @@ class Progress:
 # ---------------------------------------------------------------- main loop
 
 
+@contextmanager
+def rally_lock(out):
+    """Hold an OS lock so a live rally cannot be resumed by another engine."""
+    with (pathlib.Path(out) / "engine.lock").open("a+b") as lock:
+        if os.name == "nt":
+            import msvcrt
+            if lock.tell() == 0:
+                lock.write(b"0")
+                lock.flush()
+            lock.seek(0)
+            acquire = lambda: msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+            release = lambda: msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+            acquire = lambda: fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            release = lambda: fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+        try:
+            acquire()
+        except OSError as exc:
+            raise ValueError("rally already has an active engine; wait for it to stop") from exc
+        try:
+            yield
+        finally:
+            lock.seek(0)
+            release()
+
+
 def play(idea, total, players, out, ticker):
+    with rally_lock(out):
+        return _play(idea, total, players, out, ticker)
+
+
+def _play(idea, total, players, out, ticker):
     rally = Rally(idea, total, players, out, start=False)
     try:
         rally.start()
@@ -503,44 +604,91 @@ def play(idea, total, players, out, ticker):
 
 
 def play_turns(rally, idea, total, players, ticker):
-    prev, side, durations, consecutive_faults = None, 0, [], 0
-    n = 1
+    hits = rally.state["hits"]
+    prev = hits[-1] if hits else None
+    current = rally.state.get("current") or {}
+    side = current.get("side", rally.state.get("next_side", (prev["side"] ^ 1) if prev else 0))
+    durations, consecutive_faults = [], 0
+    n = len(hits) + 1
     while n <= total:
         me, them = players[side], players[1 - side]
         rally.state["current"] = {"n": n, "side": side, "started_at": _now_ms()}
         rally.save()
         expected = sum(durations) / len(durations) if durations else 30
         ticker.fly(n, total, side, expected)
+        notes = consume_notes(rally)
+        phase = phase_for(n, total)
+        incoming_size = len(prev["version"]) if prev else max(120, len(idea))
+        budget = size_budget(phase, incoming_size)
         system = SYSTEM.format(me=me.label, them=them.label, n=n, total=total,
-                               phase=PHASES[phase_for(n, total)])
+                               remaining=remaining_iterations(n, total),
+                               phase=PHASES[phase], budget=budget)
+        prompt = user_prompt(idea, prev, them.label, notes)
         t0 = time.time()
-        reply, err = None, None
-        for _ in range(2):
+        reply, err, fatal = None, None, False
+        for attempt in range(2):
             try:
-                reply = parse_reply(me.call(system, user_prompt(idea, prev, them.label)))
+                reply = parse_reply(me.call(system, prompt))
+                if not reply["parsed"]:
+                    raise RuntimeError("unparseable player response (expected the JSON reply object)")
                 break
             except Exception as e:  # noqa: BLE001 - surface any transport failure as a fault
                 err = str(e)
+                fatal = is_fatal_player_error(err)
+                reply = None
+                if fatal or attempt == 1:
+                    break
+                system += "\nReply with only the JSON object, including a non-empty version."
+                time.sleep(5)
+        if reply is not None:
+            over_budget = len(reply["version"]) > budget
+            if over_budget:
+                ticker.land(f"  size limit: {me.label} returned {len(reply['version'])} characters; retrying within {budget}")
+                retry_system = system + "\nYour previous version exceeded the character limit. Return the complete version again, cut to the stated maximum."
+                try:
+                    retry_user = prompt + "\n---\nYour previous over-budget version to revise:\n" + reply["version"]
+                    retry = parse_reply(me.call(retry_system, retry_user))
+                    if retry["parsed"]:
+                        reply = retry
+                        over_budget = len(reply["version"]) > budget
+                except Exception as e:  # noqa: BLE001 - keep valid output unless the error is fatal
+                    if is_fatal_player_error(str(e)):
+                        err, fatal, reply = str(e), True, None
+                    else:
+                        ticker.land(f"  size-limit retry failed; keeping first valid reply: {e}")
         took = time.time() - t0
         if reply is None:
             consecutive_faults += 1
-            rally.state["faults"].append({"n": n, "side": side, "player": me.label, "error": err})
+            rally.state["faults"].append({"n": n, "side": side, "player": me.label,
+                                           "error": err, "fatal": fatal})
+            rally.state["next_side"] = side if fatal else 1 - side
             rally.save("fault", n=n, side=side, summary=f"{me.label}: {err}")
+            if fatal:
+                rally.state["status"] = "error"
+                rally.state["current"] = None
+                rally.state["finished_at"] = _now_ms()
+                rally.save("error", summary=f"Fatal player error; stopped immediately: {err}")
+                ticker.land(f"  fatal error: stopping immediately; {me.label}: {err}")
+                return rally
             ticker.land(f"  fault: {me.label} could not return hit {n}: {err}")
             if consecutive_faults >= 2:
+                rally.state["next_side"] = side
                 rally.state["status"] = "error"
                 rally.state["current"] = None
                 rally.state["finished_at"] = _now_ms()
                 rally.save("error", summary="Rally stopped after two consecutive faults")
+                ticker.land("  stopping: both players failed consecutive turns; partial result is saved")
                 return rally
-            side = 1 - side  # opponent takes the hit
+            side = rally.state["next_side"]  # opponent takes the hit
             continue
         consecutive_faults = 0
         durations.append(took)
         hit = {"n": n, "side": side, "player": me.label, "seconds": round(took, 1), **reply,
+               "phase": phase, "size_budget": budget, "over_budget": over_budget,
                **drift(prev["version"] if prev else None, reply["version"])}
         rally.state["hits"].append(hit)
         rally.state["current"] = None
+        rally.state["next_side"] = 1 - side
         rally.save("hit", n=n, side=side, summary=f"Hit {n}/{total} by {me.label}")
         measured = drift_text(hit)
         ticker.land(f"  hit {n}/{total} by {me.label} in {took:.0f}s"
@@ -554,8 +702,102 @@ def play_turns(rally, idea, total, players, ticker):
     return rally
 
 
+def is_fatal_player_error(message):
+    """Identify errors that cannot be fixed by retrying or switching players."""
+    value = message.lower().replace("_", " ").replace("-", " ")
+    phrases = (
+        "token limit", "max tokens", "context limit", "context length", "context window",
+        "maximum context", "prompt is too long", "input is too long", "too many tokens",
+        "maximum number of tokens", "token count exceeds", "input token limit",
+        "request too large", "maximum input", "authentication", "unauthorized",
+        "not logged in", "api key", "unknown model", "model not found", "not on path",
+        "no such file or directory", "unknown option", "unrecognized option", "unknown flag",
+    )
+    return any(phrase in value for phrase in phrases) or (
+        "token" in value and ("maximum" in value or "limit" in value))
+
+
+def consume_notes(rally):
+    inbox = rally.out / "inbox"
+    inbox.mkdir(exist_ok=True)
+    seen = rally.state.setdefault("owner_notes", [])
+    for item in sorted(inbox.glob("*.md")):
+        note = item.read_text(encoding="utf-8").strip()
+        if note:
+            seen.append(note)
+            rally.save("note", summary="Owner note received", note=note)
+        item.unlink(missing_ok=True)
+    return list(rally.state["owner_notes"])
+
+
+def append_note(directory, note):
+    note = note.strip()
+    if not note:
+        raise ValueError("note cannot be empty")
+    out, state = load_state(directory)
+    if state.get("status") != "running":
+        raise ValueError(f"rally is {state.get('status')}; notes can only be added while it is running")
+    inbox = out / "inbox"
+    inbox.mkdir(exist_ok=True)
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=inbox,
+                                     prefix=f"note-{time.time_ns():020d}-", suffix=".tmp", delete=False) as f:
+        f.write(note)
+        temporary = pathlib.Path(f.name)
+    os.replace(temporary, inbox / (temporary.stem + ".md"))
+    print(f"Note queued for the next hit in {out}.")
+
+
+def resume_command(argv):
+    ap = argparse.ArgumentParser(prog="rally.py resume", description="Resume an interrupted rally.")
+    ap.add_argument("--dir", help="rally directory (default: active rally)")
+    args = ap.parse_args(argv)
+    try:
+        out, _ = load_state(args.dir)
+        with rally_lock(out):
+            return resume_rally(out)
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        print(f"Cannot resume rally: {exc}", file=sys.stderr)
+        return 1
+
+
+def resume_rally(out):
+    # Reload after acquiring the lock; another engine may have just finished.
+    out, state = load_state(out)
+    if state.get("status") == "done":
+        raise ValueError("rally is already complete")
+    if len(state.get("hits", [])) >= state.get("iterations", 0):
+        raise ValueError("rally has no unfinished iterations")
+    players = [Player(p["spec"]) for p in state["players"]]
+    if not preflight_players(players):
+        print("Resume stopped: player preflight failed. Fix the issue, then try again.", file=sys.stderr)
+        return 1
+    rally = Rally.__new__(Rally)
+    rally.out, rally.state, rally.started = out, state, True
+    rally.state["status"] = "running"
+    rally.state["finished_at"] = None
+    rally.save("resume", summary=f"Resuming at hit {len(state['hits']) + 1}/{state['iterations']}")
+    set_active(out)
+    previous_term = signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
+    try:
+        rally = play_turns(rally, state["idea"], state["iterations"], players, Progress())
+    except KeyboardInterrupt:
+        rally.state.update(status="stopped", current=None, finished_at=_now_ms())
+        rally.save("stopped", summary="Rally paused by user")
+    except Exception as exc:  # noqa: BLE001 - preserve partial work
+        rally.state.update(status="error", current=None, finished_at=_now_ms())
+        rally.save("error", summary=f"Engine error: {exc}")
+        print(f"Rally stopped after an engine error: {exc}", file=sys.stderr)
+    finally:
+        signal.signal(signal.SIGTERM, previous_term)
+    write_outputs(rally)
+    print(f"status: {rally.state['status']}")
+    print(f"final: {out / 'final.md'}")
+    return 0 if rally.state["status"] == "done" else 130 if rally.state["status"] == "stopped" else 1
+
+
 def write_outputs(rally):
     s, out = rally.state, rally.out
+    lines = []
     if s["hits"]:
         last = s["hits"][-1]
         questions = []
@@ -564,11 +806,29 @@ def write_outputs(rally):
                 if q not in questions:
                     questions.append(q)
         lines = [last["version"].rstrip(), "", "---", "",
-                 f"Rally: {len(s['hits'])} hits between "
+                 f"Rally: {len(s['hits'])}/{s['iterations']} hits between "
                  + " and ".join(p["label"] for p in s["players"]) + "."]
+        over = [h for h in s["hits"] if h.get("over_budget")]
+        if over:
+            lines += ["", "Size limit retries that remained over budget: "
+                      + ", ".join(str(h["n"]) for h in over) + "."]
         if questions:
             lines += ["", "Open questions raised during the rally:"] + [f"- {q}" for q in questions]
-        (out / "final.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        conflicts = [c for h in s["hits"] for c in h.get("owner_conflicts", [])]
+        if conflicts:
+            lines += ["", "Owner requirements agents proposed changing:"]
+            lines += [f"- {c.get('item', 'requirement')}: {c.get('reason', 'no reason supplied')}"
+                      for c in conflicts]
+    else:
+        lines = ["# Ping-pong rally", "", "No completed turns yet."]
+    lines += ["", f"Status: {s['status']}."]
+    if s.get("faults"):
+        lines += ["", "Player errors:"]
+        lines += [f"- Hit {f['n']}, {f['player']}: {f['error']}" for f in s["faults"]]
+    if s.get("owner_notes"):
+        lines += ["", "Owner notes carried through the rally:"]
+        lines += [f"- {note}" for note in s["owner_notes"]]
+    (out / "final.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def main():
@@ -577,12 +837,25 @@ def main():
         return animation_command(sys.argv[2:])
     if len(sys.argv) > 1 and sys.argv[1] in ("status", "wait"):
         return watch_command(sys.argv[1], sys.argv[2:])
+    if len(sys.argv) > 1 and sys.argv[1] == "resume":
+        return resume_command(sys.argv[2:])
+    if len(sys.argv) > 1 and sys.argv[1] == "note":
+        note_ap = argparse.ArgumentParser(prog="rally.py note", description="Queue an owner note for the next hit.")
+        note_ap.add_argument("--dir", help="rally directory (default: active rally)")
+        note_ap.add_argument("text", nargs="+", help="the note to add")
+        note_args = note_ap.parse_args(sys.argv[2:])
+        try:
+            append_note(note_args.dir, " ".join(note_args.text))
+            return 0
+        except (OSError, ValueError, KeyError) as exc:
+            print(f"Cannot add note: {exc}", file=sys.stderr)
+            return 1
     if len(sys.argv) > 1 and sys.argv[1] == "doctor":
         return doctor(sys.argv[2:])
     ap = argparse.ArgumentParser(description="Bounce an idea between two LLMs.")
     ap.add_argument("--idea", help="the idea as text")
     ap.add_argument("--idea-file", help="read the idea from a file")
-    ap.add_argument("-n", "--iterations", type=int, default=6, help="number of hits (default 6)")
+    ap.add_argument("-n", "--iterations", type=int, default=10, help="number of hits (default 10)")
     ap.add_argument("--players", help="two comma-separated specs, e.g. cli:claude,cli:codex")
     ap.add_argument("--out", help="rally directory (default ./.ping-pong/<timestamp>-<slug>)")
     display = ap.add_mutually_exclusive_group()
@@ -608,6 +881,10 @@ def main():
               + ". See PLAYERS.md for setup.", file=sys.stderr)
         return 2
     players = [Player(s) for s in specs]
+    if not preflight_players(players):
+        print("Rally not started: player preflight failed. Fix the issue or choose different players.",
+              file=sys.stderr)
+        return 1
 
     slug = re.sub(r"[^a-z0-9]+", "-", idea.lower())[:32].strip("-") or "idea"
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -632,7 +909,13 @@ def main():
     print(f"dir: {out}", flush=True)
     previous_term = signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
     try:
-        rally = play(idea.strip(), a.iterations, players, out, Progress())
+        try:
+            rally = play(idea.strip(), a.iterations, players, out, Progress())
+        except Exception as exc:  # noqa: BLE001 - leave and report any partial artifact
+            print(f"Rally stopped by an engine error: {exc}", file=sys.stderr)
+            if (out / "final.md").exists():
+                print(f"partial result: {out / 'final.md'}", file=sys.stderr)
+            return 1
         write_outputs(rally)
         print(f"status: {rally.state['status']}", flush=True)
         if (out / "final.md").exists():
