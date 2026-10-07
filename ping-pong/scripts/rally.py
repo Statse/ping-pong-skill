@@ -49,6 +49,8 @@ CLI_VENDOR = {"claude": "anthropic", "codex": "openai", "gemini": "gemini",
               "cursor": "cursor", "opencode": "opencode", "copilot": "github"}
 ACTIVE = pathlib.Path.home() / ".ping-pong" / "active.json"
 ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+LEDGER_CAP = 25          # entries rendered into a prompt; owner entries are never evicted
+BULLET = re.compile(r"^\s*[-*+]\s*")
 
 
 def cli_bin(tool):
@@ -268,6 +270,7 @@ How to return the ball:
 - Keep what is strong. Name what is weak, vague, risky or missing, and fix it in your version.
 - Refine the current version rather than restarting it; keep concrete details unless you have a reason to drop them.
 - Never silently remove or contradict an explicit owner requirement. If you think one should change, preserve it and report the conflict with a reason for the owner.
+- Honour the decision ledger in the prompt. `O-*` entries are owner non-negotiables: you cannot drop them, only report a conflict. Add a `P-*` decision for anything you commit to, and drop one only with a reason.
 - Your version must stand alone: someone who reads only it gets the whole idea.
 - Write in the language of the owner's original idea.
 
@@ -276,7 +279,9 @@ Reply with only this JSON object:
  "version": "the full improved idea, markdown allowed",
  "changes": ["one short line per change you made"],
  "open_questions": ["questions only the idea's owner can answer"],
- "owner_conflicts": [{{"item": "owner requirement", "reason": "why it should change"}}]}}"""
+ "owner_conflicts": [{{"item": "owner requirement", "reason": "why it should change"}}],
+ "decisions": [{{"op": "add", "text": "a decision this version commits to"}},
+               {{"op": "drop", "id": "P-2", "reason": "why it no longer holds"}}]}}"""
 
 PHASES = {
     "open": "Open up. Challenge assumptions, find the stronger angle, add what is missing.",
@@ -310,11 +315,63 @@ def size_budget(phase, incoming_size):
     return max(1, int(incoming_size * multiplier))
 
 
-def user_prompt(idea, prev, them, owner_notes=None):
+def seed_owner_ledger(out):
+    """Owner non-negotiables from constraints.md. A missing or empty file is valid."""
+    try:
+        text = (pathlib.Path(out) / "constraints.md").read_text(encoding="utf-8")
+    except OSError:
+        return []
+    entries = []
+    for line in text.splitlines():
+        item = BULLET.sub("", line).strip()
+        if item:
+            entries.append({"id": "O-%d" % (len(entries) + 1), "by": "owner",
+                            "text": item, "status": "standing", "reason": None})
+    return entries
+
+
+def ledger_view(ledger, cap=LEDGER_CAP):
+    """Entries to render, plus whether owner entries alone exceed the cap.
+
+    Eviction is a rendering decision only: the oldest player entries drop out
+    of the prompt first, owner entries never do, and state keeps everything.
+    """
+    owner = [e for e in ledger if e.get("by") == "owner"]
+    others = [e for e in ledger if e.get("by") != "owner"]
+    room = cap - len(owner)
+    keep = {e["id"] for e in owner}
+    keep.update(e["id"] for e in (others[-room:] if room > 0 else []))
+    return [e for e in ledger if e["id"] in keep], len(owner) > cap
+
+
+def render_ledger(ledger, cap=LEDGER_CAP):
+    """The compact ledger as it reaches a player."""
+    shown, over_cap = ledger_view(ledger, cap)
+    lines = ["Decision ledger (carried through the whole rally). O-* entries are owner",
+             "non-negotiables and cannot be dropped; dropping a P-* entry requires a reason:"]
+    if not shown:
+        lines.append("- (empty: no decisions recorded yet)")
+    for entry in shown:
+        by = "owner" if entry.get("by") == "owner" else str(entry.get("by") or "player")
+        mark = ("" if entry.get("status") == "standing"
+                else " [dropped: %s]" % (entry.get("reason") or "no reason recorded"))
+        lines.append("- {0} ({1}): {2}{3}".format(entry["id"], by, entry.get("text", ""), mark))
+    if over_cap:
+        lines.append("Cap exception: owner entries alone exceed the %d-entry ledger cap, so every"
+                     " owner entry is listed above and player entries are omitted." % cap)
+    elif len(shown) < len(ledger):
+        lines.append("%d older player entries are omitted to stay within the %d-entry cap;"
+                     " they remain recorded." % (len(ledger) - len(shown), cap))
+    return "\n".join(lines)
+
+
+def user_prompt(idea, prev, them, owner_notes=None, ledger=None):
     head = f"Original idea from the owner:\n\n{idea}\n"
     if owner_notes:
         head += "\nOwner notes (these are authoritative and persist for the rest of the rally):\n"
         head += "\n".join(f"- {note}" for note in owner_notes) + "\n"
+    if ledger is not None:
+        head += "\n" + render_ledger(ledger) + "\n"
     if prev is None:
         return head + "\nYou serve: there is no previous version yet. Write the first version."
     changes = "\n".join(f"- {c}" for c in prev["changes"]) or "- (none listed)"
@@ -339,10 +396,27 @@ def parse_reply(text):
                         "changes": [str(x) for x in d.get("changes") or []],
                         "open_questions": [str(x) for x in d.get("open_questions") or []],
                         "owner_conflicts": [x for x in d.get("owner_conflicts") or [] if isinstance(x, dict)],
+                        "decisions": ledger_ops(d.get("decisions")),
                         "parsed": True}
         except (ValueError, TypeError):
             continue
-    return {"critique": "", "version": text.strip(), "changes": [], "open_questions": [], "parsed": False}
+    return {"critique": "", "version": text.strip(), "changes": [], "open_questions": [],
+            "decisions": [], "parsed": False}
+
+
+def ledger_ops(raw):
+    """Usable ledger operations from a reply. Junk is ignored, never fatal."""
+    operations = []
+    if not isinstance(raw, list):
+        return operations
+    for item in raw:
+        if not isinstance(item, dict) or item.get("op") not in ("add", "drop"):
+            continue
+        operations.append({"op": item["op"],
+                           "id": str(item.get("id") or "").strip(),
+                           "text": str(item.get("text") or "").strip(),
+                           "reason": str(item.get("reason") or "").strip()})
+    return operations
 
 
 # ---------------------------------------------------------------- drift
@@ -390,6 +464,7 @@ class Rally:
         self.state = {
             "idea": idea, "iterations": total, "players": [p.to_dict() for p in players],
             "hits": [], "faults": [], "owner_notes": [], "next_side": 0,
+            "ledger": seed_owner_ledger(out), "disputes": [],
             "current": None, "status": "running",
             "started_at": _now_ms(), "finished_at": None, "event_id": 0,
         }
@@ -438,7 +513,10 @@ def load_state(directory=None):
 def status_text(state):
     line = f"Rally {state['status']}: {len(state['hits'])}/{state['iterations']} turns completed."
     measured = drift_text(state["hits"][-1]) if state["hits"] else ""
-    return f"{line} Last hit {measured}." if measured else line
+    if measured:
+        line += f" Last hit {measured}."
+    standing = sum(1 for entry in state.get("ledger") or [] if entry.get("status") == "standing")
+    return f"{line} Ledger: {standing} standing." if standing else line
 
 
 def wait_for_event(directory=None, after=None, timeout=180):
@@ -623,7 +701,7 @@ def play_turns(rally, idea, total, players, ticker):
         system = SYSTEM.format(me=me.label, them=them.label, n=n, total=total,
                                remaining=remaining_iterations(n, total),
                                phase=PHASES[phase], budget=budget)
-        prompt = user_prompt(idea, prev, them.label, notes)
+        prompt = user_prompt(idea, prev, them.label, notes, rally.state.setdefault("ledger", []))
         t0 = time.time()
         reply, err, fatal = None, None, False
         for attempt in range(2):
@@ -690,6 +768,11 @@ def play_turns(rally, idea, total, players, ticker):
         rally.state["current"] = None
         rally.state["next_side"] = 1 - side
         rally.save("hit", n=n, side=side, summary=f"Hit {n}/{total} by {me.label}")
+        applied = apply_decisions(rally, n, me.label, reply.get("decisions"))
+        if applied["disputed"]:
+            for record in applied["disputed"]:
+                ticker.land("  ledger: refused {0} of {1} ({2})".format(
+                    record["op"], record["id"] or "an entry", record["refused"]))
         measured = drift_text(hit)
         ticker.land(f"  hit {n}/{total} by {me.label} in {took:.0f}s"
                     + (f": {hit['changes'][0]}" if hit["changes"] else "")
@@ -715,6 +798,66 @@ def is_fatal_player_error(message):
     )
     return any(phrase in value for phrase in phrases) or (
         "token" in value and ("maximum" in value or "limit" in value))
+
+
+def next_player_id(ledger):
+    used = [0]
+    for entry in ledger:
+        identifier = str(entry.get("id", ""))
+        if identifier.startswith("P-") and identifier[2:].isdigit():
+            used.append(int(identifier[2:]))
+    return "P-%d" % (max(used) + 1)
+
+
+def apply_decisions(rally, n, player, decisions):
+    """Record one hit's ledger operations. Nothing here faults or ends the rally.
+
+    Refused and rejected operations become disputes so the owner can see what a
+    player wanted to remove; the targeted entry itself is left untouched.
+    """
+    ledger = rally.state.setdefault("ledger", [])
+    disputes = rally.state.setdefault("disputes", [])
+    by_id = {str(entry.get("id")): entry for entry in ledger}
+    added, dropped, refused = [], [], []
+
+    def dispute(operation, target, reason, why):
+        record = {"n": n, "player": player, "op": operation, "id": target,
+                  "reason": reason, "refused": why}
+        disputes.append(record)
+        refused.append(record)
+
+    for item in decisions or []:
+        if item["op"] == "add":
+            if not item["text"]:
+                dispute("add", item["id"], item["reason"], "an added decision needs text")
+                continue
+            entry = {"id": next_player_id(ledger), "by": player, "text": item["text"],
+                     "status": "standing", "reason": None}
+            ledger.append(entry)
+            by_id[entry["id"]] = entry
+            added.append(entry["id"])
+            continue
+        target, reason = item["id"], item["reason"]
+        entry = by_id.get(target)
+        if not reason:
+            dispute("drop", target, reason, "a drop requires a reason")
+        elif target.startswith("O-") or (entry is not None and entry.get("by") == "owner"):
+            dispute("drop", target, reason, "owner non-negotiables cannot be dropped")
+        elif entry is None:
+            dispute("drop", target, reason, "no such ledger entry")
+        elif entry.get("status") != "standing":
+            dispute("drop", target, reason, "entry was already dropped")
+        else:
+            entry["status"] = "dropped"
+            entry["reason"] = reason
+            dropped.append(target)
+
+    if added or dropped or refused:
+        summary = "Ledger after hit %d: %d added, %d dropped, %d disputed" % (
+            n, len(added), len(dropped), len(refused))
+        rally.save("ledger", n=n, summary=summary, added=added, dropped=dropped,
+                   disputed=[dict(record) for record in refused])
+    return {"added": added, "dropped": dropped, "disputed": refused}
 
 
 def consume_notes(rally):
@@ -773,6 +916,9 @@ def resume_rally(out):
         return 1
     rally = Rally.__new__(Rally)
     rally.out, rally.state, rally.started = out, state, True
+    # Keep the ledger a resumed rally already has; never re-seed it from constraints.md.
+    rally.state.setdefault("ledger", [])
+    rally.state.setdefault("disputes", [])
     rally.state["status"] = "running"
     rally.state["finished_at"] = None
     rally.save("resume", summary=f"Resuming at hit {len(state['hits']) + 1}/{state['iterations']}")
@@ -828,7 +974,33 @@ def write_outputs(rally):
     if s.get("owner_notes"):
         lines += ["", "Owner notes carried through the rally:"]
         lines += [f"- {note}" for note in s["owner_notes"]]
+    lines += ledger_report(s)
     (out / "final.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def ledger_report(state):
+    """Standing decisions, dropped ones with their reasons, and every dispute."""
+    ledger = state.get("ledger") or []
+    lines = []
+    standing = [e for e in ledger if e.get("status") == "standing"]
+    dropped = [e for e in ledger if e.get("status") != "standing"]
+    if standing:
+        lines += ["", "Decisions standing at the end of the rally:"]
+        lines += ["- {0} ({1}): {2}".format(
+            e["id"], "owner non-negotiable" if e.get("by") == "owner" else e.get("by") or "player",
+            e.get("text", "")) for e in standing]
+    if dropped:
+        lines += ["", "Decisions dropped during the rally:"]
+        lines += ["- {0} ({1}): {2} — dropped because: {3}".format(
+            e["id"], e.get("by") or "player", e.get("text", ""),
+            e.get("reason") or "no reason recorded") for e in dropped]
+    if state.get("disputes"):
+        lines += ["", "Ledger disputes (requests the engine refused):"]
+        lines += ["- Hit {0}, {1} wanted to {2} {3}: {4} (reason given: {5})".format(
+            d.get("n"), d.get("player"), d.get("op", "change"), d.get("id") or "an entry",
+            d.get("refused", "refused"), d.get("reason") or "none")
+            for d in state["disputes"]]
+    return lines
 
 
 def main():
