@@ -240,13 +240,36 @@ class ProcessTests(unittest.TestCase):
         self.assertIn('No player CLIs', result.stderr)
         self.assertNotIn('Traceback', result.stderr)
 
+    def test_format_command_is_windows_safe(self):
+        argv = ['tool', 'arg with spaces', 'quote"me']
+        rendered = rally.format_command(argv)
+        self.assertIsInstance(rendered, str)
+        self.assertTrue(rendered)
+        if os.name == 'nt':
+            self.assertEqual(rendered, subprocess.list2cmdline(argv))
+        else:
+            self.assertIn('arg with spaces', rendered)
+
     def test_cli_timeout_kills_process_tree(self):
         with tempfile.TemporaryDirectory() as directory:
             marker = Path(directory) / 'should-not-exist'
-            descendant = 'import time,pathlib; time.sleep(1); pathlib.Path({!r}).touch()'.format(str(marker))
-            parent = 'import subprocess,sys,time; subprocess.Popen([sys.executable,"-c",{!r}]); time.sleep(30)'.format(descendant)
+            gate = Path(directory) / 'cleanup-finished'
+            # Only attempt forbidden work after run_cli has completed cleanup. A
+            # one-second timer races with taskkill startup on busy Windows runners.
+            descendant = (
+                'import time,pathlib; gate=pathlib.Path({!r}); deadline=time.monotonic()+10\n'
+                'while not gate.exists() and time.monotonic()<deadline: time.sleep(0.02)\n'
+                'if gate.exists(): pathlib.Path({!r}).touch()'
+            ).format(str(gate), str(marker))
+            parent = (
+                'import subprocess,sys,time; '
+                'subprocess.Popen([sys.executable,"-c",{!r}], '
+                'stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL); '
+                'time.sleep(30)'
+            ).format(descendant)
             with self.assertRaises(subprocess.TimeoutExpired):
                 rally.run_cli([sys.executable, '-c', parent], None, directory, 0.4)
+            gate.touch()
             time.sleep(1.1)
             self.assertFalse(marker.exists(), 'timed-out CLI left a running descendant')
 

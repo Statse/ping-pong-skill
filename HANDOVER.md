@@ -30,7 +30,8 @@ Changes are local, uncommitted and unpushed. Do not commit or push without being
 - `animation off|on|status` controls `~/.ping-pong/settings.json`; `--no-animation` disables one run.
 - `wait` drains ordered events; `status` is plain text. No ASCII court or visual scoreboard remains.
 - Cancellation records `stopped`; CLI subprocess cleanup covers timeout and interruption.
-- CI workflow tests Python 3.9/3.12 on Linux/macOS/Windows. Remote matrix has not run; no push authorized.
+- CI workflow tests Python 3.9/3.12 on Linux/macOS/Windows, including an empty-PATH `doctor` step and
+  a credential-free mock rally. Issue #2 tracks making that six-cell matrix green on a PR.
 - `.gitignore` keeps rally run directories (`.ping-pong/`) and bytecode out of the repository.
 
 ### Drift telemetry (#4)

@@ -12,7 +12,7 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
         python: ['3.9', '3.12']
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 5
+    timeout-minutes: 10
     env:
       PYTHONUTF8: '1'
       PYTHONDONTWRITEBYTECODE: '1'
@@ -21,7 +21,42 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
+
       - name: Enforce Python 3.9 source compatibility
         run: python -m unittest discover -s tests -p test_compatibility.py -v
+
+      - name: Doctor with no player CLIs on PATH
+        shell: python
+        run: |
+          import os
+          import subprocess
+          import sys
+          import tempfile
+
+          with tempfile.TemporaryDirectory() as empty:
+              environment = dict(os.environ, PATH=empty, HOME=empty, USERPROFILE=empty)
+              for key in ('ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GEMINI_API_KEY', 'OPENROUTER_API_KEY'):
+                  environment.pop(key, None)
+              result = subprocess.run(
+                  [sys.executable, 'ping-pong/scripts/rally.py', 'doctor'],
+                  env=environment, capture_output=True, text=True, timeout=10)
+          output = result.stdout + result.stderr
+          print(output)
+          assert result.returncode == 1, result.returncode
+          assert 'PLAYERS.md' in output and 'No player CLIs' in output
+          assert 'Traceback' not in output
+
+      - name: Mock rally (credential-free)
+        shell: bash
+        run: |
+          out="$RUNNER_TEMP/mock-rally"
+          python ping-pong/scripts/rally.py \
+            --idea "CI mock idea" -n 2 \
+            --players mock:left,mock:right \
+            --no-animation --out "$out"
+          test -f "$out/final.md"
+          test -f "$out/state.json"
+          python -c "import json,sys; s=json.load(open(sys.argv[1],encoding='utf-8')); assert s['status']=='done', s['status']" "$out/state.json"
+
       - name: Engine, animation preferences, and process cleanup
         run: python -m unittest discover -s tests -p "test_*.py" -v

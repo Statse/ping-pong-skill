@@ -18,6 +18,7 @@ import os
 import pathlib
 import random
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -189,12 +190,21 @@ def _cli(tool, model, system, user):
     try:
         p = run_cli(cmd, stdin, workdir, timeout=1800)
         if p.returncode != 0:
-            raise RuntimeError(f"{tool} exited {p.returncode}: {(p.stderr or p.stdout)[-400:]}")
+            raise RuntimeError(
+                f"{tool} exited {p.returncode} ({format_command(cmd)}): "
+                f"{(p.stderr or p.stdout)[-400:]}")
         if tool == "codex" and os.path.exists(out_file):
             return pathlib.Path(out_file).read_text(encoding="utf-8")
         return ANSI.sub("", p.stdout)
     finally:
         shutil.rmtree(workdir)
+
+
+def format_command(cmd):
+    """Render an argv list for logs/errors. Windows uses list2cmdline, not shlex."""
+    if os.name == "nt":
+        return subprocess.list2cmdline(cmd)
+    return " ".join(shlex.quote(part) for part in cmd)
 
 
 def run_cli(cmd, stdin, workdir, timeout):
