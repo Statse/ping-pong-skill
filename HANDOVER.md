@@ -1,69 +1,80 @@
-# Handover: confirmed baseline and optional animation
+# Handover: recovered baseline
 
-Updated 2026-10-06. User decisions in this conversation supersede the original display plan.
+Updated 2026-10-07. Start here, then read `SPEC-v2.md` for scope and acceptance criteria.
+This replaces the stale handover that described already-committed work as uncommitted.
 
-## Baseline
+## Baseline and current owner decisions
 
-`/ping-pong 10 <idea>` means ten total alternating turns between two configurable agent CLI
-sessions, normally five each. The host produces a plan, build prompt, or spec from the last version.
-The owner explicitly confirmed this baseline. Do not redesign the refinement flow.
+`/ping-pong 10 <idea>` means ten total alternating hits between two independent agent
+sessions, normally five each. Default is 10; `-n` overrides it. Both players may use the
+same CLI. The host writes `deliverable.md` using judgment and `ping-pong/OUTPUTS.md`.
 
-## Current display decision
+The newest decisions recorded in the recovered refine worktree supersede the old v2
+proposal: scaled 30/40/30 phases, per-phase character budgets with one rewrite attempt,
+persistent owner notes, resume, immediate stops for fatal context/setup errors, and
+small preflight calls. These are now implemented with credential-free regression tests.
+Preflight is automatic; do not run doctor first unless a separate diagnostic is useful.
 
-Two small pixel paddles hit one ball back and forth while work runs. Decorative loop only; no scores,
-turn visualization, dashboard, replay, or automatic external browser. It stops on completion, error,
-cancellation, or disconnection. Users must be able to disable it; persistent and per-run controls exist.
-Host-neutral first. The owner also requested investigation across Copilot, Claude, Codex, Cursor and CLIs.
+Display: two small pixel paddles and one ball, decorative only. It stops on completion,
+error, cancellation, or disconnection. Persistent off wins over `--animation`; reduced
+motion is respected. Native host adapters remain deferred. See `ping-pong/DISPLAY.md`.
 
-Task: https://github.com/Statse/ping-pong-skill/issues/16
-Research: `docs/host-animation-support.md` (primary sources, dated; adapters not certified).
+## Implemented and verified locally
 
-## Working tree
+- Atomic state writes followed by ordered append-only events; plain `status` and `wait`.
+- Drift metrics `lines_kept` and `size_ratio` on each hit (null on the serve).
+- Default 10 hits, phase-scaled prompts, and remaining-hit count.
+- Character budgets: open 1.6x, deepen 1.3x, close 1.0x. One rewrite on overage;
+  accept and flag remaining overage. This is not a strict size guarantee.
+- Unparsed replies are faults. One retry after five seconds, with a JSON reminder;
+  opponent covers the hit after failure. Two consecutive faults stop the rally.
+- Fatal token/context, authentication, model, and missing-tool errors stop immediately.
+- Both selected players receive a small format preflight before starting or resuming.
+- Owner notes are queued atomically in `inbox/`, consumed in submission order, and
+  retained in subsequent prompts and `final.md`. Multiline notes are preserved.
+- Resume keeps completed hits and event IDs. An OS lock prevents simultaneous engines
+  writing the same rally. OS locks release automatically when an engine exits or dies.
+- Cancellation and faults leave a usable `final.md`, even before the first completed hit.
+- Stdlib-only Python 3.9 floor. Windows remains best-effort pending a live rally.
 
-Changes are local, uncommitted and unpushed. Do not commit or push without being asked.
+## Recovery record
 
-- Removed old court, pet, statusline installer and OpenCode hook scripts.
-- Removed old visual instructions from the skill, display guide and current spec.
-- New `assets/widget.js` is an embeddable web component; `widget.html` and `adapter.js` connect it to
-  the optional stdlib local server in `scripts/animation.py`.
-- `--animation` exposes the widget on a free loopback port for embedding; nothing opens automatically.
-- `animation off|on|status` controls `~/.ping-pong/settings.json`; `--no-animation` disables one run.
-- `wait` drains ordered events; `status` is plain text. No ASCII court or visual scoreboard remains.
-- Cancellation records `stopped`; CLI subprocess cleanup covers timeout and interruption.
-- CI workflow tests Python 3.9/3.12 on Linux/macOS/Windows, including an empty-PATH `doctor` step and
-  a credential-free mock rally. Issue #2 tracks making that six-cell matrix green on a PR.
-- `.gitignore` keeps rally run directories (`.ping-pong/`) and bytecode out of the repository.
+The original mixed work is preserved, not discarded:
 
-### Drift telemetry (#4)
+- `recovery/refine-2026-10-07`: snapshot of the dirty refine worktree.
+- `recovery/stash-2026-10-07`: durable reference to the original stash commit.
+- Original `stash@{0}` remains available.
+- Patch copies: `<git-common-dir>/recovery-2026-10-07/refine.patch` and `stash.patch`.
 
-Each hit now stores `lines_kept` and `size_ratio` in `state.json`; the serve reports both as `null`
-rather than dividing by zero. `drift()` and `drift_text()` in `rally.py` are pure and unit-tested with
-known-retention fixtures. The numbers surface in plain language ("rewrote 99 % of lines, 1.68x the
-length") in the per-hit progress log and in `status`/`wait`.
+The failure was an incomplete reconciliation: `play_turns()` called a missing
+`size_budget()` and passed owner notes to a three-argument `user_prompt()`. Both missing
+implementations were recovered from the stash. Regression tests now exercise the actual
+rally flow, not just the helper functions.
 
-Deviation from #4's wording: it asks for rendering in `rally.py frame` and on the court. #16 removed
-both, so the plain-text `status`/`wait` output and the progress log are the surviving surfaces and
-carry the numbers instead. Final-artifact reporting stays with #14.
+The original refine worktree is retained as historical WIP. Continue from the recovery
+branch or merged main; do not resume implementation from that stale worktree.
 
-Host-native adapters (MCP Apps, Claude mods, Codex native pet) are researched but not implemented.
-The localhost widget is a working integration seam, not a claim of native embedding everywhere.
+## Remaining work and limits
 
-## Remaining engine work
+Next feature: #5, the durable decision ledger. Prompt instructions and conflict reports
+currently help the host detect lost requirements; they do not enforce preservation.
+Owner notes do not yet become `O-*` entries. #6 (budgets), #7 (retry handling), and #11
+(notes) have partial implementations; keep their remaining acceptance criteria explicit.
+The second retry delay mentioned in #7 requires resolving its conflict with one retry.
 
-#1 tracks the earlier v2 engine plan, detailed in `SPEC-v2.md`. #16 replaces its old display
-requirements. #4 (drift telemetry) is implemented locally. Ledger, length budgets, adapters/doctor
-probes, inbox, resume and structured deliverable metadata remain planned. The drift numbers exist to
-verify the ledger and length-budget slices against the v1 baseline in `docs/evidence/`; the dogfood
-re-run that #4's parent acceptance asks for needs paid live players and has not been done. The current doctor only checks binary availability.
-Earlier API and extra CLI transports remain until their dedicated player cleanup; they were not
-removed as part of animation work.
+No paid live dogfood rally was run during recovery. Keep `docs/evidence/` as the historical
+baseline; a live rerun is required to demonstrate improved retention and convergence.
+Time budgets and final question triage remain planned. A players adapter table, cached
+probe product, deterministic shape schema, and richer display panels were scope cuts;
+do not resurrect them from the old proposal. Existing API/extra CLI transports remain
+supported until a dedicated cleanup is explicitly chosen.
 
-Retain `docs/evidence/`: historical live rally measurements, not current display instructions.
-No protocol change was made to prompts/replies in the animation replacement, so no paid live
-rally is needed for this task. Keep Python 3.9 compatibility and the stdlib-only engine.
-
-## Validation
+## Validation and agent coordination
 
 Run `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v`.
-Credential-free baseline: `python3 ping-pong/scripts/rally.py --idea "test" -n 4 --players mock:left,mock:right --no-animation`.
-Browser verification uses an isolated temporary preference file, never the owner's saved setting.
+The suite includes a real four-hit mock rally, event monitoring, parser fixtures,
+process cleanup, animation preferences, budgets, note delivery, resume, and locking.
+
+Each agent needs its own branch and worktree. Give one agent ownership of `rally.py`.
+Do not apply the same stash into multiple active worktrees. Integrate one tested slice
+at a time; update this handover when implemented scope changes.

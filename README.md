@@ -55,19 +55,23 @@ the rally works by launching agent CLIs on your machine, and the claude.ai sandb
 
 ```sh
 git clone https://github.com/Statse/ping-pong-skill.git
-cp -r ping-pong-skill/ping-pong ~/.claude/skills/
+mkdir -p ~/.codex/skills
+cp -R ping-pong-skill/ping-pong ~/.codex/skills/
 ```
+
+For Claude Code, replace `~/.codex/skills` with `~/.claude/skills`. For Cursor, use
+`~/.cursor/skills`; for OpenCode, use `~/.config/opencode/skills`.
 
 ### Verify the install
 
 ```sh
-cd ~/.claude/skills/ping-pong
-python3 scripts/rally.py doctor          # which player CLIs are on PATH
+cd ~/.codex/skills/ping-pong
+python3 scripts/rally.py doctor          # preflight an auto-picked pair
 python3 scripts/rally.py --list-players  # what it would pick for you
 ```
 
-`doctor` reports availability only; it does not check that you are logged in or that a model is
-reachable. Then restart your host (or start a new session) so it picks up the new skill.
+`doctor` sends a small format probe to both selected players, so it checks authentication and model
+access as well as installation. Restart your host (or start a new session) so it picks up the skill.
 
 ---
 
@@ -106,12 +110,17 @@ python3 scripts/rally.py [--idea TEXT | --idea-file PATH] [-n N] [--players A,B]
 |---|---|---|
 | `--idea TEXT` | — | The idea as text. One of `--idea` / `--idea-file` is required. |
 | `--idea-file PATH` | — | Read the idea from a file. Use this for anything longer than a sentence. |
-| `-n`, `--iterations N` | `6` | Total alternating turns, not turns per player. `-n 10` is five each. |
+| `-n`, `--iterations N` | `10` | Total alternating turns, not turns per player. `-n 14` is seven each. |
 | `--players A,B` | auto | Exactly two specs, comma-separated. See [PLAYERS.md](ping-pong/PLAYERS.md). |
 | `--out DIR` | `./.ping-pong/<timestamp>-<slug>-<random>` | Where the rally is written. Must not already hold a rally. |
 | `--animation` | off | Expose the optional pixel widget on a loopback port. Nothing opens a browser. |
 | `--no-animation` | — | Disable the display for this one rally. Mutually exclusive with `--animation`. |
 | `--list-players` | — | Print detected players and the auto pick, then exit. |
+
+Both selected players are preflighted before every rally. Use `doctor --players A,B` to check a pair
+manually. Each hit tells its agent the remaining count and whether to explore, deepen, or converge.
+Those phases scale to the requested rally length at about 30%, 40%, and 30%. A version that exceeds
+its phase character budget gets one rewrite attempt; any remaining overage is recorded.
 
 Exit codes: `0` the rally finished, `130` it was cancelled, `1` it ended in an error, `2` the arguments
 or player setup were wrong.
@@ -143,7 +152,8 @@ order. Exit codes: `0` an event arrived, `2` the timeout expired, `1` the rally 
 With no `--after` on a finished rally it reports the terminal event immediately. Both commands fall
 back to the active rally when `--dir` is omitted.
 
-Event types, in order: `serve`, then `hit` or `fault` per turn, then one of `done`, `error`, `stopped`.
+Event types include `serve`, `hit`, `fault`, owner `note`, `resume`, and a terminal `done`,
+`error`, or `stopped`.
 
 Both commands also print the last hit's drift in plain language:
 
@@ -182,7 +192,7 @@ python3 scripts/rally.py animation on       # enable them again
 python3 scripts/rally.py animation status   # print the current preference
 ```
 
-Default is on. Changing it never interrupts a running rally. A persistent **off** beats a per-run
+The saved preference defaults to on; displaying the widget still requires `--animation`. Changing the preference never interrupts a running rally. A persistent **off** beats a per-run
 `--animation` request, so once you turn it off it stays off until you turn it back on. In an embedded
 widget, unchecking **Animation** does the same thing and saves the preference. An unreadable or
 malformed settings file is treated as off — a broken preference must not force motion on.
@@ -205,9 +215,10 @@ often; if a built-in default is rejected, set the variable or name the model in 
 
 ### Timeouts and limits
 
-These are fixed in the engine rather than configurable: 1800 s per CLI call, 900 s per API call, one
-retry per hit, and two consecutive faults end the rally with `status: error`. A fault switches sides so
-the opponent takes the hit. Time budgets and graceful resume are planned, not built.
+These are fixed in the engine rather than configurable: 1800 s per CLI call and 900 s per API call.
+Recoverable call failures retry once after a five-second delay, then the opponent covers the hit; two consecutive faults stop
+the rally. Authentication, unknown-model, and token/context-limit errors stop immediately and are
+reported. Interrupted runs can be resumed with the command below.
 
 ---
 
@@ -219,6 +230,8 @@ the opponent takes the hit. Time budgets and graceful resume are planned, not bu
 | `~/.ping-pong/active.json` | Pointer to the most recently started rally, so `status` and `wait` work without `--dir` |
 | `<rally dir>/state.json` | Full rally state, rewritten atomically after every transition |
 | `<rally dir>/events.jsonl` | Append-only ordered event log, one JSON object per line |
+| `<rally dir>/inbox/` | Owner notes waiting for the next hit, consumed in submission order |
+| `<rally dir>/engine.lock` | OS lock preventing simultaneous engines for the same rally |
 | `<rally dir>/final.md` | The last version plus every open question raised during the rally |
 | `<rally dir>/deliverable.md` | Written by the host agent in step 6, not by the engine |
 
@@ -227,12 +240,20 @@ The rally directory defaults to `./.ping-pong/<timestamp>-<slug>-<random>` in yo
 event it is reading, never older. Your idea and the players' replies stay on your machine; nothing is
 uploaded anywhere except to whichever model provider you chose as a player.
 
+During a rally, queue an owner note for the next hit with
+`python3 scripts/rally.py note --dir D "text"`. The note remains in each later prompt. Resume an
+interrupted or stopped rally with `python3 scripts/rally.py resume --dir D`; completed hits are kept.
+Resume refuses to start while another engine holds that rally’s process lock.
+
 ---
 
 ## Troubleshooting
 
-**"Need exactly two players"** — nothing was detected. Run `scripts/rally.py doctor`, then log into an
-agent CLI or export an API key. [PLAYERS.md](ping-pong/PLAYERS.md) has the setup per player.
+**"Need exactly two players"** — fewer than two player specs were detected. Set up two CLIs or API
+providers, or pass `--players A,B`. [PLAYERS.md](ping-pong/PLAYERS.md) has setup instructions.
+
+**Preflight failed** — a selected player could not authenticate, reach its model, or return valid JSON.
+Fix the reported issue and start again; the rally has not begun.
 
 **A player faults every turn** — the CLI is on PATH but not usable: not logged in, or the model alias
 in your spec does not exist for that tool. The fault message in `state.json` carries the CLI's own

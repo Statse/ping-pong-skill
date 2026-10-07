@@ -34,3 +34,15 @@ Without `--players`, the script detects CLIs first (Claude, Codex, Cursor, OpenC
 ## Testing
 
 `mock:<name>` returns canned replies after a short delay. Use it to test the rally or the optional pixel animation.
+
+## Preflight
+
+Before each rally, ping-pong sends a short format request to both selected players. Each must return
+a valid JSON envelope with the expected `version: "pong"`. The rally does not start if either probe
+fails. Check a pair manually:
+
+```sh
+python3 scripts/rally.py doctor --players cli:claude,cli:codex
+```
+
+Preflight uses the selected CLI or API provider, confirming that authentication and model access work.
