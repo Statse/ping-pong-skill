@@ -32,6 +32,19 @@ motion is respected. Native host adapters remain deferred. See `ping-pong/DISPLA
 - Both selected players receive a small format preflight before starting or resuming.
 - Owner notes are queued atomically in `inbox/`, consumed in submission order, and
   retained in subsequent prompts and `final.md`. Multiline notes are preserved.
+- Durable decision ledger (#5). State carries `ledger` entries
+  `{id, by, text, status, reason}` and a `disputes` list. `constraints.md` in the rally
+  directory seeds `O-1`, `O-2`, … owner non-negotiables, one bullet per non-empty line;
+  a missing or empty file yields an empty owner ledger. Player replies may send
+  `decisions: [{op, id?, text?, reason?}]`; junk items and unknown ops are ignored.
+  Every prompt renders the ledger, capped at 25 rendered entries by evicting the oldest
+  player entries only, with an explicit cap-exception line when owner entries overflow.
+  Eviction is rendering-only; state keeps everything. Refused and rejected operations
+  (owner drops, reasonless drops, unknown or already-dropped ids, text-less adds) become
+  disputes and never fault or end the rally. Each hit that changes the ledger appends one
+  `ledger` event. Resume preserves the stored ledger and does not re-seed it.
+  `final.md` lists standing decisions, dropped ones with reasons, and disputes;
+  `status` reports the standing count.
 - Resume keeps completed hits and event IDs. An OS lock prevents simultaneous engines
   writing the same rally. OS locks release automatically when an engine exits or dies.
 - Cancellation and faults leave a usable `final.md`, even before the first completed hit.
@@ -57,9 +70,11 @@ branch or merged main; do not resume implementation from that stale worktree.
 
 ## Remaining work and limits
 
-Next feature: #5, the durable decision ledger. Prompt instructions and conflict reports
-currently help the host detect lost requirements; they do not enforce preservation.
-Owner notes do not yet become `O-*` entries. #6 (budgets), #7 (retry handling), and #11
+#5 (decision ledger) is implemented and tested in `tests/test_ledger.py`. Owner notes
+queued with `note` still do not become `O-*` entries; only `constraints.md` seeds them,
+so the remaining #11 work is converting answered notes into ledger entries. The ledger
+records and reports lost requirements; it still does not force a player to keep text in
+its version. #6 (budgets), #7 (retry handling), and #11
 (notes) have partial implementations; keep their remaining acceptance criteria explicit.
 The second retry delay mentioned in #7 requires resolving its conflict with one retry.
 
@@ -74,7 +89,8 @@ supported until a dedicated cleanup is explicitly chosen.
 
 Run `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v`.
 The suite includes a real four-hit mock rally, event monitoring, parser fixtures,
-process cleanup, animation preferences, budgets, note delivery, resume, and locking.
+process cleanup, animation preferences, budgets, note delivery, resume, locking, and
+the decision ledger (seeding, cap rendering, disputes, final output, resume delivery).
 
 Each agent needs its own branch and worktree. Give one agent ownership of `rally.py`.
 Do not apply the same stash into multiple active worktrees. Integrate one tested slice
