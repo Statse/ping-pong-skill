@@ -19,11 +19,12 @@ Arguments: the **idea** (text or a file path) and the **iterations** (total alte
    ```
    python3 scripts/rally.py --idea-file idea.md -n <hits> [--players a,b]
    ```
+   Write any owner non-negotiables as one bullet per line in `constraints.md` inside the rally directory before starting; the engine seeds them as `O-*` ledger entries that players cannot drop. A missing file is fine.
    Add `--animation` only when the host can embed the local widget described in [DISPLAY.md](DISPLAY.md); otherwise omit it. Respect the saved preference and `--no-animation`. Done when the process is running and `state.json` exists in its printed directory.
 
 4. **Follow the rally.** Use `python3 scripts/rally.py wait --dir <dir> --after 0 --timeout 60`, then advance `--after` to each returned event ID until `done`, `error`, or `stopped`. Agents receive the current hit, remaining count, and a phase scaled to the total: about 30% explore, 40% deepen, 30% converge. A turn over its character budget gets one rewrite attempt. Relay owner notes with `python3 scripts/rally.py note --dir <dir> "text"`; later turns keep them. Resume interrupted runs with `python3 scripts/rally.py resume --dir <dir>`. Fatal errors such as token/context limits stop immediately; report the cause and partial result. The optional display is only two pixel paddles and a ball looping while work runs. Relay “disable animation” with `python3 scripts/rally.py animation off`; this persists and never stops the rally. See [DISPLAY.md](DISPLAY.md) for embedding. Do not modify host settings or open an external browser automatically.
 
-5. **Check the rally.** Read `final.md` and skim each hit's `changes` and `owner_conflicts` in `state.json`. Confirm explicit owner requirements remain; a proposed change is not owner approval. Report drift if players substantially rewrote the idea. If the rally stopped, report the cause and partial result.
+5. **Check the rally.** Read `final.md` and skim each hit's `changes` and `owner_conflicts` plus the `ledger` and `disputes` in `state.json`. Standing decisions, dropped ones with reasons, and refused drops are all in `final.md`. Confirm explicit owner requirements remain; a proposed change is not owner approval. Report drift if players substantially rewrote the idea. If the rally stopped, report the cause and partial result.
 
 6. **Shape the deliverable.** Use your judgment to choose and write the most useful output from [OUTPUTS.md](OUTPUTS.md):
    - **Not code** → the form that makes the idea most usable (plan, pitch, outline, brief…).
