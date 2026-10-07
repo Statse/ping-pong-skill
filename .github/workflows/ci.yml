@@ -26,18 +26,25 @@ jobs:
         run: python -m unittest discover -s tests -p test_compatibility.py -v
 
       - name: Doctor with no player CLIs on PATH
-        shell: bash
+        shell: python
         run: |
-          set +e
-          out="$(PATH=/usr/bin:/bin HOME="$RUNNER_TEMP/empty-home" \
-            python ping-pong/scripts/rally.py doctor 2>&1)"
-          code=$?
-          set -e
-          echo "$out"
-          test "$code" -ne 0
-          echo "$out" | grep -q 'PLAYERS.md'
-          echo "$out" | grep -q 'No player CLIs'
-          ! echo "$out" | grep -q 'Traceback'
+          import os
+          import subprocess
+          import sys
+          import tempfile
+
+          with tempfile.TemporaryDirectory() as empty:
+              environment = dict(os.environ, PATH=empty, HOME=empty, USERPROFILE=empty)
+              for key in ('ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GEMINI_API_KEY', 'OPENROUTER_API_KEY'):
+                  environment.pop(key, None)
+              result = subprocess.run(
+                  [sys.executable, 'ping-pong/scripts/rally.py', 'doctor'],
+                  env=environment, capture_output=True, text=True, timeout=10)
+          output = result.stdout + result.stderr
+          print(output)
+          assert result.returncode == 1, result.returncode
+          assert 'PLAYERS.md' in output and 'No player CLIs' in output
+          assert 'Traceback' not in output
 
       - name: Mock rally (credential-free)
         shell: bash
