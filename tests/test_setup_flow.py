@@ -44,7 +44,8 @@ class SetupFlowTests(unittest.TestCase):
         prepared = self.run_rally("setup", "--idea-file", "idea.md", *seeding)
         self.assertEqual(prepared.returncode, 0, prepared.stderr)
         directory = Path(prepared.stdout.strip())
-        self.assertTrue(directory.is_dir())
+        self.assertTrue(directory.is_dir(),
+                        "stdout=%r stderr=%r" % (prepared.stdout, prepared.stderr))
         started = self.run_rally("--idea-file", "idea.md", "-n", 2,
                                  "--players", "mock:left,mock:right", "--out", directory)
         self.assertEqual(started.returncode, 0, started.stderr)
