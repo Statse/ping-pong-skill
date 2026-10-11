@@ -463,7 +463,8 @@ class Rally:
         self.started = False
         self.state = {
             "idea": idea, "iterations": total, "players": [p.to_dict() for p in players],
-            "hits": [], "faults": [], "owner_notes": [], "next_side": 0,
+            "hits": [], "faults": [], "owner_notes": [], "consumed_notes": [],
+            "next_side": 0,
             "ledger": seed_owner_ledger(out), "disputes": [],
             "current": None, "status": "running",
             "started_at": _now_ms(), "finished_at": None, "event_id": 0,
@@ -870,17 +871,85 @@ def save_ledger_event(rally, applied):
                disputed=[dict(record) for record in applied["disputed"]])
 
 
+# Owner notes are identified by an inbox sequence number, not by a timestamp: a clock
+# too coarse to separate two quick submissions must not reorder them.
+NOTE_SEQ_WIDTH = 9
+
+
+def note_name(seq):
+    return "note-%0*d.md" % (NOTE_SEQ_WIDTH, seq)
+
+
+def note_seq(name):
+    """The sequence number in a current-format note name, or None for a legacy name."""
+    parts = name[:-3].split("-") if name.endswith(".md") else name.split("-")
+    if len(parts) == 2 and len(parts[1]) == NOTE_SEQ_WIDTH and parts[1].isdigit():
+        return int(parts[1])
+    return None
+
+
+def note_order(name):
+    """Sort pending notes by submission order, legacy timestamp names first."""
+    seq = note_seq(name)
+    return (1, seq, "") if seq is not None else (0, 0, name)
+
+
+def pending_notes(inbox):
+    return sorted(inbox.glob("note-*.md"), key=lambda item: note_order(item.name))
+
+
 def consume_notes(rally):
+    """Commit every queued note once, then archive its file.
+
+    The note identity is committed with the note, so an interruption between the
+    commit and the archive move cannot deliver the same note twice on resume.
+    """
     inbox = rally.out / "inbox"
-    inbox.mkdir(exist_ok=True)
-    seen = rally.state.setdefault("owner_notes", [])
-    for item in sorted(inbox.glob("*.md")):
-        note = item.read_text(encoding="utf-8").strip()
-        if note:
-            seen.append(note)
-            rally.save("note", summary="Owner note received", note=note)
-        item.unlink(missing_ok=True)
-    return list(rally.state["owner_notes"])
+    archive = inbox / "consumed"
+    archive.mkdir(parents=True, exist_ok=True)
+    consumed = rally.state.setdefault("consumed_notes", [])
+    committed = set(consumed)
+    for item in pending_notes(inbox):
+        identity = item.name[:-3]
+        try:
+            note = item.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        if not note:
+            # A reserved name whose text is not written yet; leave it for a later hit.
+            continue
+        if identity not in committed:
+            rally.state.setdefault("owner_notes", []).append(note)
+            consumed.append(identity)
+            committed.add(identity)
+            rally.save("note", summary="Owner note received", note=note, note_id=identity)
+        archive_note(item, archive / item.name)
+    return list(rally.state.setdefault("owner_notes", []))
+
+
+def archive_note(item, destination):
+    """Keep the owner's own text; never delete an inbox file outright."""
+    try:
+        if destination.exists():
+            item.unlink()
+        else:
+            os.replace(item, destination)
+    except OSError:
+        pass
+
+
+def next_note_seq(inbox, state):
+    highest = 0
+    for directory in (inbox, inbox / "consumed"):
+        for item in directory.glob("note-*.md"):
+            seq = note_seq(item.name)
+            if seq is not None:
+                highest = max(highest, seq)
+    for identity in state.get("consumed_notes") or []:
+        seq = note_seq(identity)
+        if seq is not None:
+            highest = max(highest, seq)
+    return highest + 1
 
 
 def append_note(directory, note):
@@ -891,12 +960,17 @@ def append_note(directory, note):
     if state.get("status") != "running":
         raise ValueError(f"rally is {state.get('status')}; notes can only be added while it is running")
     inbox = out / "inbox"
-    inbox.mkdir(exist_ok=True)
-    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=inbox,
-                                     prefix=f"note-{time.time_ns():020d}-", suffix=".tmp", delete=False) as f:
+    (inbox / "consumed").mkdir(parents=True, exist_ok=True)
+    seq = next_note_seq(inbox, state)
+    while True:
+        try:
+            # Claiming the name itself orders concurrent submissions without a clock.
+            handle = os.open(str(inbox / note_name(seq)), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            break
+        except FileExistsError:
+            seq += 1
+    with os.fdopen(handle, "w", encoding="utf-8") as f:
         f.write(note)
-        temporary = pathlib.Path(f.name)
-    os.replace(temporary, inbox / (temporary.stem + ".md"))
     print(f"Note queued for the next hit in {out}.")
 
 

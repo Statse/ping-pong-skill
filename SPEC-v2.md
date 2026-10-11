@@ -41,8 +41,10 @@ persistent preference. `assets/` contains the host-neutral component and local a
 
 `state.json` is replaced atomically before the matching event is appended to
 `events.jsonl`. Each rally has an OS-held `engine.lock` to prevent competing writers.
-Owner notes are queued as timestamped files under `inbox/`, consumed in submission
-order, and retained in state. The host produces `deliverable.md` separately.
+Owner notes are queued under `inbox/` as `note-<sequence>.md`, where the claimed
+filename and not a clock fixes submission order. A note's identity is committed with
+its text, so an interruption cannot deliver it twice; delivered files move to
+`inbox/consumed/`. The host produces `deliverable.md` separately.
 
 ## Recovered engine acceptance
 
@@ -100,9 +102,10 @@ Acceptance:
   backoff are implemented. The issue also mentions a 20-second delay while allowing
   only one retry; resolve this before changing retry count or closing the issue.
 - **Wall-clock budget (#8): planned.** Bound elapsed time and stop with a partial artifact.
-- **Owner inbox (#11): partial.** Persistent prompt notes and `note` exist. Converting
-  answers into `O-*` ledger entries depends on #5. The recovered implementation uses
-  atomic files under `inbox/`, replacing the old single-file inbox proposal.
+- **Owner inbox (#11): done.** Persistent prompt notes, `note`, sequence-ordered
+  queueing, and exactly-once delivery across interruption and resume are implemented.
+  The owner decision rules out automatic note-to-ledger conversion and phase pauses;
+  `O-*` entries come from `constraints.md` only.
 - **Question triage (#12): planned.** Final questions need answered / kept / dropped
   groups with reasons and deduplication. Current output collects all raised questions.
 - **Native animation adapters (#16): deferred.** Keep host-neutral behavior and current
