@@ -70,6 +70,15 @@ motion is respected. Native host adapters remain deferred. See `ping-pong/DISPLA
   elapsed seconds are still recorded and printed.
 - Owner notes are published into their claimed inbox name atomically, so a note queued
   while the engine reads the inbox is delivered whole or waits for the next hit.
+- Players are exactly the three supported agent CLIs (#21): `cli:claude`, `cli:codex`,
+  `cli:cursor`, plus the internal `mock:` player for credential-free development. The
+  API transports, API-key detection, OpenCode, Copilot, Gemini CLI and the
+  arbitrary-command player are removed; `urllib` is no longer imported. The default
+  pair is Claude then Codex, falling back to two detected CLIs, and otherwise a report
+  naming the missing default CLI and how to choose a pair. No provider substitution,
+  no invented model alias, no model enumeration. Two sessions of one CLI remain a valid
+  explicit choice. API keys in the environment affect nothing. Covered by
+  `tests/test_players.py`.
 - Resume keeps completed hits and event IDs. An OS lock prevents simultaneous engines
   writing the same rally. OS locks release automatically when an engine exits or dies.
 - Cancellation and faults leave a usable `final.md`, even before the first completed hit.
