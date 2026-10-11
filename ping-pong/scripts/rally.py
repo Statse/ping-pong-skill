@@ -271,15 +271,18 @@ def seed_owner_ledger(out):
 
 def new_rally_dir(idea, requested=None):
     """A directory with no rally in it yet. The host may name it instead of guessing."""
+    # abspath, not resolve: Windows resolve() can hand back a relative path for a
+    # directory that does not exist yet, and the host has to be able to use what we print.
     if requested:
-        out = pathlib.Path(requested).resolve()
+        out = pathlib.Path(os.path.abspath(requested))
         out.mkdir(parents=True, exist_ok=True)
     else:
         slug = re.sub(r"[^a-z0-9]+", "-", (idea or "").lower())[:32].strip("-") or "idea"
         stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-        base = pathlib.Path(".ping-pong").resolve()
+        base = pathlib.Path(os.path.abspath(".ping-pong"))
         base.mkdir(parents=True, exist_ok=True)
         out = pathlib.Path(tempfile.mkdtemp(prefix=f"{stamp}-{slug}-", dir=base))
+    out = out.resolve()  # safe now that the directory exists
     if (out / "state.json").exists() or (out / "events.jsonl").exists():
         raise ValueError(f"rally already exists in {out}; choose a new directory")
     return out

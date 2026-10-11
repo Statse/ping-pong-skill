@@ -86,7 +86,10 @@ motion is respected. Native host adapters remain deferred. See `ping-pong/DISPLA
   no file and the rally runs with an empty owner ledger; nothing is inferred into an
   owner requirement. Starting still accepts `--out`, and the original brief is in every
   hit's prompt. `tests/test_setup_flow.py` runs the documented setup-then-start
-  sequence through the real CLI on mock players.
+  sequence through the real CLI on mock players. Rally directories are built with
+  `os.path.abspath` and resolved only after creation: on Windows, `Path.resolve()`
+  returned a relative path for a directory that did not exist yet, so the default
+  rally directory was printed relative to the launching shell.
 - Resume keeps completed hits and event IDs. An OS lock prevents simultaneous engines
   writing the same rally. OS locks release automatically when an engine exits or dies.
 - Cancellation and faults leave a usable `final.md`, even before the first completed hit.

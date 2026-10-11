@@ -66,6 +66,19 @@ class SetupFlowTests(unittest.TestCase):
         self.assertTrue(all(entry["by"] == "owner" for entry in state["ledger"]))
         self.assertEqual(len(state["hits"]), 2)
 
+    def test_setup_prints_an_absolute_directory(self):
+        """A relative path is unusable to a host that launches from elsewhere."""
+        (self.workspace / "idea.md").write_text("An idea\n", encoding="utf-8")
+        prepared = self.run_rally("setup", "--idea-file", "idea.md")
+        self.assertEqual(prepared.returncode, 0, prepared.stderr)
+        printed = prepared.stdout.strip()
+        self.assertTrue(os.path.isabs(printed), printed)
+        self.assertTrue(Path(printed).is_dir(), printed)
+        requested = self.run_rally("setup", "--idea", "An idea", "--out", "named-rally")
+        self.assertEqual(requested.returncode, 0, requested.stderr)
+        self.assertTrue(os.path.isabs(requested.stdout.strip()), requested.stdout)
+        self.assertTrue((self.workspace / "named-rally").is_dir())
+
     def test_owner_constraints_and_brief_reach_every_player_prompt(self):
         captured = []
 
