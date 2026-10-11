@@ -55,6 +55,7 @@ motion is respected. Native host adapters remain deferred. See `ping-pong/DISPLA
   per hit that changed anything. Resume preserves the stored ledger and does not re-seed it.
   `final.md` lists standing decisions, dropped ones with reasons, and disputes;
   `status` reports the standing count.
+<<<<<<< HEAD
 - Unified lifecycle (#23). `execute()` is the one execution path for a new and a
   resumed rally: it starts the rally if needed, runs the turns, and applies one
   cancellation/error/finalization policy, so both paths end in a terminal state with a
@@ -90,6 +91,17 @@ motion is respected. Native host adapters remain deferred. See `ping-pong/DISPLA
   `os.path.abspath` and resolved only after creation: on Windows, `Path.resolve()`
   returned a relative path for a directory that did not exist yet, so the default
   rally directory was printed relative to the launching shell.
+=======
+- One refined outcome (#12). The owner brief reaches every hit verbatim, labelled as
+  carrying any instruction about form, language, audience or length, and the system
+  prompt tells players to honor it over their own preferred shape. The host writes one
+  `deliverable.md`: the requested form when the brief names one, otherwise a standalone
+  refined idea. There is no classification step, template picker, or output interview.
+  `final.md` repeats the brief as authoritative, labels a partial rally with its status
+  and hit count, and splits the last hit's open questions from questions earlier hits
+  stopped asking. The engine never decides a question is answered; the host checks the
+  earlier group against the final version, the owner notes and the ledger.
+>>>>>>> 4d58bf3 (Return one refined outcome and honor the brief's output request)
 - Resume keeps completed hits and event IDs. An OS lock prevents simultaneous engines
   writing the same rally. OS locks release automatically when an engine exits or dies.
 - Cancellation and faults leave a usable `final.md`, even before the first completed hit.
@@ -129,7 +141,8 @@ earlier scope notes; read them before picking the next slice.
 
 No paid live dogfood rally was run during recovery. Keep `docs/evidence/` as the historical
 baseline; a live rerun is required to demonstrate improved retention and convergence.
-Time budgets and final question triage remain planned. A players adapter table, cached
+Time budgets remain planned. Question triage (#12) was replaced by the
+one-outcome contract above; do not add answered/kept/dropped groups. A players adapter table, cached
 probe product, deterministic shape schema, and richer display panels were scope cuts;
 do not resurrect them from the old proposal. Existing API/extra CLI transports remain
 supported until a dedicated cleanup is explicitly chosen.
@@ -138,10 +151,17 @@ supported until a dedicated cleanup is explicitly chosen.
 
 Run `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v`.
 The suite includes a real four-hit mock rally, event monitoring, parser fixtures,
+<<<<<<< HEAD
 process cleanup, animation preferences, budgets, note delivery and durability,
 resume, locking, and the decision ledger (seeding, cap rendering, disputes, final output, resume delivery),
 and the lifecycle contracts in `tests/test_lifecycle.py` (shared error and cancellation
 policy, exit codes, explicit restore, and the single per-hit request policy).
+=======
+process cleanup, animation preferences, budgets, note delivery, resume, locking, and
+the decision ledger (seeding, cap rendering, disputes, final output, resume delivery),
+and the one-outcome contract (brief carried to every hit, question grouping, partial
+rallies, and the documented host steps in `SKILL.md` and `OUTPUTS.md`).
+>>>>>>> 4d58bf3 (Return one refined outcome and honor the brief's output request)
 
 Each agent needs its own branch and worktree. Give one agent ownership of `rally.py`.
 Do not apply the same stash into multiple active worktrees. Integrate one tested slice

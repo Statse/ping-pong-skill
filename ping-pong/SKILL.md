@@ -1,17 +1,17 @@
 ---
 name: ping-pong
-description: Ping-pong an idea between two configurable agent sessions for a set number of hits, then turn the refined idea into a deliverable (a one-shot build prompt, a ticket-ready spec, or whatever fits a non-code idea). Use when the user says "ping-pong", "/ping-pong", or wants an idea rallied, bounced, or cross-refined between models.
+description: Ping-pong an idea between two configurable agent sessions for a set number of hits, then return the refined idea in the form the brief asked for (a plan, a pitch, a spec, a one-shot build prompt, or a standalone refined idea by default). Use when the user says "ping-pong", "/ping-pong", or wants an idea rallied, bounced, or cross-refined between models.
 ---
 
 # Ping-pong
 
-Two configurable agent CLI sessions rally one idea; both may use the same CLI. Each **hit** = one model receives the current version plus its opponent's notes, critiques it, and returns an improved version. Early hits open the idea up, middle hits deepen it, late hits converge. You are the umpire: you start the rally, watch it, and turn the last version into the deliverable.
+Two configurable agent CLI sessions rally one idea; both may use the same CLI. Each **hit** = one model receives the current version plus its opponent's notes, critiques it, and returns an improved version. Early hits open the idea up, middle hits deepen it, late hits converge. You are the umpire: you start the rally, watch it, and turn the last version into one outcome — the form the brief asked for, or a standalone refined idea when it asked for none.
 
 Arguments: the **idea** (text or a file path) and the **iterations** (total alternating turns, default 10). `/ping-pong 14 Tinder for houses` means fourteen turns, normally seven per player. Respect requests to disable the animation.
 
 ## Steps
 
-1. **Take the arguments.** If the idea is missing, ask for it. Write it to `idea.md` in the working directory if it is longer than a sentence or two. Done when you have the idea and a hit count.
+1. **Take the arguments.** If the idea is missing, ask for it. Keep the brief whole, including any instruction about form, language, audience or length: the engine relays it to every hit. Write it to `idea.md` in the working directory if it is longer than a sentence or two. Done when you have the brief and a hit count.
 
 2. **Pick and preflight the players.** Run `python3 scripts/rally.py --list-players` (paths are relative to this skill's folder). Supported players are `cli:claude`, `cli:codex` and `cli:cursor`; the default pair is Claude then Codex, and two sessions of one CLI are fine if asked for. If the user named models, use their specs; otherwise accept the auto pick. If a CLI is missing, report which one and the supported alternatives; never substitute another provider. The engine preflights both selected players automatically when starting. Use `python3 scripts/rally.py doctor --players a,b` only for a separate diagnostic check; it sends additional provider requests. If preflight fails, report the issue.
 
@@ -27,13 +27,9 @@ Arguments: the **idea** (text or a file path) and the **iterations** (total alte
 
 5. **Check the rally.** Read `final.md` and skim each hit's `changes` and `owner_conflicts` plus the `ledger` and `disputes` in `state.json`. Standing decisions, dropped ones with reasons, and refused drops are all in `final.md`. Confirm explicit owner requirements remain; a proposed change is not owner approval. Report drift if players substantially rewrote the idea. If the rally stopped, report the cause and partial result.
 
-6. **Shape the deliverable.** Use your judgment to choose and write the most useful output from [OUTPUTS.md](OUTPUTS.md):
-   - **Not code** → the form that makes the idea most usable (plan, pitch, outline, brief…).
-   - **Code, one-shot** → a one-shot build prompt. It qualifies only if all hold: one deployable unit, no open decision blocks the build, acceptance can be checked in one session.
-   - **Code, larger** → a ticket-ready spec, structured as vertical slices so `/to-tickets` or `/to-issues` can split it directly.
-   Write it in the language of the original idea. Save it as `deliverable.md` in the rally dir. Done when every open question from the rally is either resolved in the deliverable or listed in its open-questions section.
+6. **Write the one outcome.** Do not ask the user to pick an output format. If the brief asked for a form, language, audience or length, that request wins — write exactly that, using [OUTPUTS.md](OUTPUTS.md) if it has a matching shape. Otherwise write a standalone refined idea: the shape a reader can use directly, with no build prompt or ticket spec invented for them. Synthesize the last completed version with the owner brief, owner notes and standing ledger entries; a proposed change is never owner approval, so never drop an explicit owner requirement. Keep only questions that are genuinely still open — `final.md` separates the last hit's questions from ones it stopped asking; check those against the final version, the notes and the ledger instead of relisting them, and invent no answers. Write it in the language of the brief and save it as `deliverable.md` in the rally dir. Clarify with the user only if the brief contradicts itself in a way that blocks writing.
 
-7. **Report.** Give the user: the deliverable, the three biggest changes (who made them), the open questions, and the path to `deliverable.md`. For a ticket-ready spec, offer to run `/to-tickets` on it.
+7. **Report.** Lead with the outcome itself, then the path to `deliverable.md`, the biggest changes (who made them), and any genuinely open questions. Keep ledger, retry and event detail in `final.md` and `state.json`; surface a failure, a partial rally or a consequential owner conflict in the report. For a ticket-ready spec, offer to run `/to-tickets` on it.
 
 ## Install
 

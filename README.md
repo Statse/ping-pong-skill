@@ -2,8 +2,9 @@
 
 # ping-pong
 
-A skill that makes two agent CLI sessions rally one idea back and forth until it is sharp, then turns
-the last version into something you can act on — a plan, a one-shot build prompt, or a ticket-ready spec.
+A skill that makes two agent CLI sessions rally one idea back and forth until it is sharp, then returns
+the refined idea in the form you asked for. Ask for a plan, a pitch, a spec or a one-shot build prompt
+in the same prompt and you get that; ask for nothing in particular and you get the refined idea itself.
 
 ```
 /ping-pong 10 I have a business idea that is Tinder but for houses
@@ -12,7 +13,7 @@ the last version into something you can act on — a plan, a one-shot build prom
 Ten alternating turns, normally five per player. Each **hit** is one model receiving the current
 version plus its opponent's notes, critiquing it, and returning an improved version. Early hits open
 the idea up, middle hits deepen it, late hits converge. Your host agent is the umpire: it starts the
-rally, follows it, and writes the deliverable.
+rally, follows it, and writes the one outcome — no output questionnaire, no template to pick.
 
 Both players can be the same CLI. The engine is Python 3.9+, standard library only — no dependencies
 to install, no API key required if you are already logged into an agent CLI.
@@ -89,7 +90,8 @@ python3 scripts/rally.py --idea "Tinder for houses" -n 10 --players cli:claude,c
 ```
 
 Or just ask your agent: `/ping-pong 10 Tinder for houses`. It will pick players, start the rally in the
-background, follow it, and write the deliverable for you.
+background, follow it, and write the deliverable for you. Say how you want the result in the same
+prompt — `/ping-pong 10 Tinder for houses, as a one-page pitch in Finnish` — and that request wins.
 
 A ten-hit rally between two real CLIs takes a while — each hit is a full agent session. Run it in the
 background and follow the event stream rather than blocking on it.
@@ -241,7 +243,7 @@ reported. Interrupted runs can be resumed with the command below.
 | `<rally dir>/inbox/` | Owner notes waiting for the next hit, named `note-<sequence>.md` and consumed in submission order |
 | `<rally dir>/inbox/consumed/` | Notes already delivered, kept rather than deleted |
 | `<rally dir>/engine.lock` | OS lock preventing simultaneous engines for the same rally |
-| `<rally dir>/final.md` | The last version plus every open question raised during the rally |
+| `<rally dir>/final.md` | The last version, the owner brief, and open questions split into what the last hit still asks and what earlier hits stopped asking |
 | `<rally dir>/deliverable.md` | Written by the host agent in step 6, not by the engine |
 
 The rally directory defaults to `./.ping-pong/<timestamp>-<slug>-<random>` in your working directory.
