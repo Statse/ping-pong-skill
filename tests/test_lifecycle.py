@@ -63,7 +63,7 @@ class LifecycleTests(unittest.TestCase):
         with patch.object(rally, 'consume_notes', side_effect=RuntimeError('broke on hit one')):
             game = self.play()
         self.assertEqual(game.state['hits'], [])
-        self.assertIn('No completed turns yet', self.final())
+        self.assertIn('no hit completed', self.final())
         self.assertEqual(rally.report_result(game, stream=self.out), 1)
 
     def test_a_resumed_rally_uses_the_same_error_policy_and_exit_code(self):
