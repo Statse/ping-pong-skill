@@ -230,7 +230,8 @@ reported. Interrupted runs can be resumed with the command below.
 | `~/.ping-pong/active.json` | Pointer to the most recently started rally, so `status` and `wait` work without `--dir` |
 | `<rally dir>/state.json` | Full rally state, rewritten atomically after every transition |
 | `<rally dir>/events.jsonl` | Append-only ordered event log, one JSON object per line |
-| `<rally dir>/inbox/` | Owner notes waiting for the next hit, consumed in submission order |
+| `<rally dir>/inbox/` | Owner notes waiting for the next hit, named `note-<sequence>.md` and consumed in submission order |
+| `<rally dir>/inbox/consumed/` | Notes already delivered, kept rather than deleted |
 | `<rally dir>/engine.lock` | OS lock preventing simultaneous engines for the same rally |
 | `<rally dir>/final.md` | The last version plus every open question raised during the rally |
 | `<rally dir>/deliverable.md` | Written by the host agent in step 6, not by the engine |

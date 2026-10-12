@@ -4,6 +4,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -191,3 +192,100 @@ class RecoveryTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class OwnerNoteDurabilityTests(unittest.TestCase):
+    """Issue #11: a queued note must be delivered exactly once, in submission order."""
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.directory = Path(temporary.name)
+        self.players = [rally.Player('mock:left'), rally.Player('mock:right')]
+        for replacement in (patch.object(rally, 'ACTIVE', self.directory / 'active.json'),
+                            contextlib.redirect_stdout(io.StringIO())):
+            replacement.__enter__()
+            self.addCleanup(replacement.__exit__, None, None, None)
+        self.game = rally.Rally('An idea', 4, self.players, self.directory)
+        self.inbox = self.directory / 'inbox'
+
+    def reload(self):
+        """A fresh engine over the committed state, as resume builds one."""
+        _, state = rally.load_state(self.directory)
+        game = rally.Rally.__new__(rally.Rally)
+        game.out, game.state, game.started = self.directory, state, True
+        return game
+
+    def note_events(self):
+        events = [json.loads(line) for line in
+                  (self.directory / 'events.jsonl').read_text().splitlines()]
+        return [event for event in events if event['type'] == 'note']
+
+    def test_interruption_after_the_commit_does_not_redeliver_the_note(self):
+        rally.append_note(self.directory, 'Keep the owner wording')
+        queued = list(self.inbox.glob('note-*.md'))
+        self.assertEqual(len(queued), 1)
+        # Commit the note, then fail before the inbox file can be archived.
+        with patch.object(rally, 'archive_note', side_effect=OSError('crash')):
+            with self.assertRaises(OSError):
+                rally.consume_notes(self.game)
+        self.assertTrue(queued[0].is_file())
+
+        resumed = self.reload()
+        self.assertEqual(rally.consume_notes(resumed), ['Keep the owner wording'])
+        self.assertEqual(len(self.note_events()), 1)
+        self.assertEqual(list(self.inbox.glob('note-*.md')), [])
+        self.assertTrue((self.inbox / 'consumed' / queued[0].name).is_file())
+
+    def test_interruption_before_the_commit_keeps_the_note(self):
+        rally.append_note(self.directory, 'Survive the crash')
+        with patch.object(rally.Rally, 'save', side_effect=OSError('crash')):
+            with self.assertRaises(OSError):
+                rally.consume_notes(self.game)
+        resumed = self.reload()
+        self.assertEqual(rally.consume_notes(resumed), ['Survive the crash'])
+        self.assertEqual(len(self.note_events()), 1)
+
+    def test_two_identical_notes_are_both_preserved(self):
+        rally.append_note(self.directory, 'Same text')
+        rally.append_note(self.directory, 'Same text')
+        self.assertEqual(rally.consume_notes(self.game), ['Same text', 'Same text'])
+        self.assertEqual(len(self.note_events()), 2)
+        self.assertEqual(len(self.game.state['consumed_notes']), 2)
+
+    def test_submission_order_survives_a_clock_without_resolution(self):
+        with patch.object(rally.time, 'time_ns', return_value=1):
+            for index in range(1, 13):
+                rally.append_note(self.directory, f'Note {index:02d}')
+        delivered = rally.consume_notes(self.game)
+        self.assertEqual(delivered, [f'Note {index:02d}' for index in range(1, 13)])
+
+    def test_legacy_pending_notes_are_consumed_once_and_ordered_first(self):
+        self.inbox.mkdir(exist_ok=True)
+        for stamp, text in ((7, 'Older legacy note'), (9, 'Newer legacy note')):
+            (self.inbox / f'note-{stamp:020d}-abc.md').write_text(text, encoding='utf-8')
+        del self.game.state['consumed_notes']
+        rally.append_note(self.directory, 'Current note')
+        self.assertEqual(rally.consume_notes(self.game),
+                         ['Older legacy note', 'Newer legacy note', 'Current note'])
+        self.assertEqual(rally.consume_notes(self.reload()),
+                         ['Older legacy note', 'Newer legacy note', 'Current note'])
+        self.assertEqual(len(self.note_events()), 3)
+
+    def test_a_reserved_name_without_text_waits_instead_of_being_lost(self):
+        self.inbox.mkdir(exist_ok=True)
+        reserved = self.inbox / rally.note_name(rally.next_note_seq(self.inbox, self.game.state))
+        reserved.touch()
+        self.assertEqual(rally.consume_notes(self.game), [])
+        self.assertTrue(reserved.is_file())
+        reserved.write_text('Written late', encoding='utf-8')
+        self.assertEqual(rally.consume_notes(self.game), ['Written late'])
+
+    def test_a_later_note_never_reuses_a_consumed_identity(self):
+        rally.append_note(self.directory, 'First')
+        rally.consume_notes(self.game)
+        # Even if the archive is gone, the committed identity still reserves the name.
+        shutil.rmtree(self.inbox / 'consumed')
+        rally.append_note(self.directory, 'Second')
+        self.assertEqual(rally.consume_notes(self.game), ['First', 'Second'])
+        self.assertEqual(len(self.note_events()), 2)

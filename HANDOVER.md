@@ -30,8 +30,16 @@ motion is respected. Native host adapters remain deferred. See `ping-pong/DISPLA
   opponent covers the hit after failure. Two consecutive faults stop the rally.
 - Fatal token/context, authentication, model, and missing-tool errors stop immediately.
 - Both selected players receive a small format preflight before starting or resuming.
-- Owner notes are queued atomically in `inbox/`, consumed in submission order, and
-  retained in subsequent prompts and `final.md`. Multiline notes are preserved.
+- Owner notes are queued in `inbox/` as `note-<9-digit sequence>.md`. The claimed
+  filename, not a timestamp, fixes submission order, so a coarse Windows clock can no
+  longer reverse two quick notes. A note's identity is committed in the same state
+  revision as its text and kept in `consumed_notes`, so an interruption between the
+  commit and the file move cannot deliver it twice; delivered files move to
+  `inbox/consumed/` instead of being deleted. Identity, not text, is deduplicated, so
+  two identical notes are both kept. A reserved but still empty file is left for a
+  later hit. Legacy `note-<timestamp>-<random>.md` files in older rallies are still
+  consumed once, ordered before current-format notes. Notes are retained in
+  subsequent prompts and `final.md`; multiline notes are preserved.
 - Durable decision ledger (#5). State carries `ledger` entries
   `{id, by, text, status, reason}` and a `disputes` list. `constraints.md` in the rally
   directory seeds `O-1`, `O-2`, … owner non-negotiables, one bullet per non-empty line;
@@ -72,13 +80,17 @@ branch or merged main; do not resume implementation from that stale worktree.
 
 ## Remaining work and limits
 
-#5 (decision ledger) is implemented and tested in `tests/test_ledger.py`. Owner notes
-queued with `note` still do not become `O-*` entries; only `constraints.md` seeds them,
-so the remaining #11 work is converting answered notes into ledger entries. The ledger
-records and reports lost requirements; it still does not force a player to keep text in
-its version. #6 (budgets), #7 (retry handling), and #11
-(notes) have partial implementations; keep their remaining acceptance criteria explicit.
-The second retry delay mentioned in #7 requires resolving its conflict with one retry.
+#5 (decision ledger) is implemented and tested in `tests/test_ledger.py`. #11 (owner
+notes) is now implemented: the owner's rewritten issue scopes it to exactly-once
+delivery and ordering, and explicitly rules out automatic note-to-ledger conversion and
+phase pauses, so `O-*` entries still come from `constraints.md` only. The ledger records
+and reports lost requirements; it still does not force a player to keep text in its
+version. #6 (budgets) and #7 (retry handling) remain partial; keep their remaining
+acceptance criteria explicit. The second retry delay mentioned in #7 requires resolving
+its conflict with one retry. The Windows note-ordering CI failure was reproduced locally
+with a frozen clock and fixed, but the cross-platform matrix must be confirmed on CI.
+Issues #12, #21, #22, #23, and #24 carry newer owner decisions than this handover's
+earlier scope notes; read them before picking the next slice.
 
 No paid live dogfood rally was run during recovery. Keep `docs/evidence/` as the historical
 baseline; a live rerun is required to demonstrate improved retention and convergence.
@@ -91,8 +103,8 @@ supported until a dedicated cleanup is explicitly chosen.
 
 Run `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v`.
 The suite includes a real four-hit mock rally, event monitoring, parser fixtures,
-process cleanup, animation preferences, budgets, note delivery, resume, locking, and
-the decision ledger (seeding, cap rendering, disputes, final output, resume delivery).
+process cleanup, animation preferences, budgets, note delivery and durability,
+resume, locking, and the decision ledger (seeding, cap rendering, disputes, final output, resume delivery).
 
 Each agent needs its own branch and worktree. Give one agent ownership of `rally.py`.
 Do not apply the same stash into multiple active worktrees. Integrate one tested slice
