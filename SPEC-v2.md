@@ -44,7 +44,8 @@ persistent preference. `assets/` contains the host-neutral component and local a
 Owner notes are queued under `inbox/` as `note-<sequence>.md`, where the claimed
 filename and not a clock fixes submission order. A note's identity is committed with
 its text, so an interruption cannot deliver it twice; delivered files move to
-`inbox/consumed/`. The host produces `deliverable.md` separately.
+`inbox/consumed/`. A note's text is published into its claimed name atomically, so the
+engine never reads a half-written note. The host produces `deliverable.md` separately.
 
 Starting and resuming share one lifecycle: `execute()` runs the remaining turns under a
 single cancellation, error, and finalization policy, `conclude()` writes the terminal

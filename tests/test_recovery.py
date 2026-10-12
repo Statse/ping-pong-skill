@@ -279,6 +279,26 @@ class OwnerNoteDurabilityTests(unittest.TestCase):
         reserved.write_text('Written late', encoding='utf-8')
         self.assertEqual(rally.consume_notes(self.game), ['Written late'])
 
+    def test_a_note_is_never_visible_half_written(self):
+        """The claimed name holds nothing or the whole note, never a prefix."""
+        multiline = 'First line of the note\nSecond line\nThird line ää 🏓'
+        seen = []
+        original = rally.os.replace
+
+        def spy(source, destination):
+            name = Path(destination).name
+            if name.startswith('note-'):
+                # The claimed name exists and is still empty until this rename.
+                seen.append((Path(destination).read_text(encoding='utf-8'),
+                             Path(source).read_text(encoding='utf-8')))
+            return original(source, destination)
+
+        with patch.object(rally.os, 'replace', spy):
+            rally.append_note(self.directory, multiline)
+        self.assertEqual(seen, [('', multiline)])
+        self.assertEqual(rally.consume_notes(self.game), [multiline])
+        self.assertEqual(list(self.inbox.glob('*.tmp')), [])
+
     def test_a_later_note_never_reuses_a_consumed_identity(self):
         rally.append_note(self.directory, 'First')
         rally.consume_notes(self.game)

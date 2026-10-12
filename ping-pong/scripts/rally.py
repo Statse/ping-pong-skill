@@ -1021,12 +1021,18 @@ def append_note(directory, note):
     while True:
         try:
             # Claiming the name itself orders concurrent submissions without a clock.
-            handle = os.open(str(inbox / note_name(seq)), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.close(os.open(str(inbox / note_name(seq)), os.O_CREAT | os.O_EXCL | os.O_WRONLY))
             break
         except FileExistsError:
             seq += 1
-    with os.fdopen(handle, "w", encoding="utf-8") as f:
+    # Publish the text atomically. The engine reads the inbox while the owner
+    # queues notes, so the claimed name must hold either nothing (it waits for a
+    # later hit) or the whole note, never a half-written one.
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=inbox,
+                                     prefix="pending-", suffix=".tmp", delete=False) as f:
         f.write(note)
+        pending = pathlib.Path(f.name)
+    os.replace(pending, inbox / note_name(seq))
     print(f"Note queued for the next hit in {out}.")
 
 

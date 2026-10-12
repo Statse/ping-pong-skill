@@ -68,6 +68,8 @@ motion is respected. Native host adapters remain deferred. See `ping-pong/DISPLA
   the rally and in `final.md` instead of being raised past the caller. The unused
   per-hit duration average and the `expected_s` progress argument are gone; per-hit
   elapsed seconds are still recorded and printed.
+- Owner notes are published into their claimed inbox name atomically, so a note queued
+  while the engine reads the inbox is delivered whole or waits for the next hit.
 - Resume keeps completed hits and event IDs. An OS lock prevents simultaneous engines
   writing the same rally. OS locks release automatically when an engine exits or dies.
 - Cancellation and faults leave a usable `final.md`, even before the first completed hit.
