@@ -1,6 +1,7 @@
 """Keep shipped Python scripts on the documented Python 3.9 floor."""
 import ast
 from pathlib import Path
+import subprocess
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -56,6 +57,26 @@ class CompatibilityTests(unittest.TestCase):
                     self.assertFalse(
                         stripped.startswith('match ') and stripped.rstrip().endswith(':'),
                         f'{path.name}:{lineno}: match statement')
+
+    def test_no_unresolved_merge_conflict_markers(self):
+        """Several agents merge into these files; a committed marker must fail here.
+
+        docs/evidence/ is a historical record of past runs and is left as captured.
+        """
+        tracked = subprocess.run(['git', 'ls-files', '-z'], cwd=ROOT, check=True,
+                                 stdout=subprocess.PIPE).stdout.decode()
+        for name in filter(None, tracked.split('\0')):
+            if name.startswith('docs/evidence/'):
+                continue
+            path = ROOT / name
+            try:
+                lines = path.read_text(encoding='utf-8').splitlines()
+            except (OSError, UnicodeDecodeError):
+                continue
+            for lineno, line in enumerate(lines, 1):
+                self.assertFalse(
+                    line.startswith(('<<<<<<< ', '>>>>>>> ')),
+                    f'{name}:{lineno}: unresolved merge conflict marker')
 
 
 if __name__ == '__main__':
