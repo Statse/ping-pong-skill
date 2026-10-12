@@ -212,6 +212,7 @@ How to return the ball:
 - Honour the decision ledger in the prompt. `O-*` entries are owner non-negotiables: you cannot drop them, only report a conflict. Add a `P-*` decision for anything you commit to, and drop one only with a reason.
 - Your version must stand alone: someone who reads only it gets the whole idea.
 - Write in the language of the owner's original idea.
+- If the brief asks for a particular output form, language, audience or length, follow it in your version; those instructions outrank your own preference. Without such a request, return a refined idea, not a build prompt or a ticket spec.
 
 Reply with only this JSON object:
 {{"critique": "honest, specific notes on the incoming version",
@@ -362,7 +363,8 @@ def render_ledger(ledger, cap=LEDGER_CAP):
 
 
 def user_prompt(idea, prev, them, owner_notes=None, ledger=None):
-    head = f"Original idea from the owner:\n\n{idea}\n"
+    head = ("Original brief from the owner, including any instruction about form, language,"
+            f" audience or length:\n\n{idea}\n")
     if owner_notes:
         head += "\nOwner notes (these are authoritative and persist for the rest of the rally):\n"
         head += "\n".join(f"- {note}" for note in owner_notes) + "\n"
@@ -1074,27 +1076,28 @@ def write_outputs(rally):
     lines = []
     if s["hits"]:
         last = s["hits"][-1]
-        questions = []
-        for h in s["hits"]:
-            for q in h["open_questions"]:
-                if q not in questions:
-                    questions.append(q)
         lines = [last["version"].rstrip(), "", "---", "",
                  f"Rally: {len(s['hits'])}/{s['iterations']} hits between "
                  + " and ".join(p["label"] for p in s["players"]) + "."]
+        if s["status"] != "done":
+            lines += ["", f"Partial result: the rally ended {s['status']} after "
+                      f"{len(s['hits'])} of {s['iterations']} hits. The version above is the"
+                      " last completed one, not a converged final version."]
+        lines += ["", "Owner brief (authoritative, as given):", "", s["idea"].strip()]
         over = [h for h in s["hits"] if h.get("over_budget")]
         if over:
             lines += ["", "Size limit retries that remained over budget: "
                       + ", ".join(str(h["n"]) for h in over) + "."]
-        if questions:
-            lines += ["", "Open questions raised during the rally:"] + [f"- {q}" for q in questions]
+        lines += open_question_report(s)
         conflicts = [c for h in s["hits"] for c in h.get("owner_conflicts", [])]
         if conflicts:
             lines += ["", "Owner requirements agents proposed changing:"]
             lines += [f"- {c.get('item', 'requirement')}: {c.get('reason', 'no reason supplied')}"
                       for c in conflicts]
     else:
-        lines = ["# Ping-pong rally", "", "No completed turns yet."]
+        lines = ["# Ping-pong rally", "",
+                 "Partial result: no hit completed, so there is no refined version yet.", "",
+                 "Owner brief (authoritative, as given):", "", s["idea"].strip()]
     lines += ["", f"Status: {s['status']}."]
     if s.get("error"):
         lines += ["", f"The engine stopped with an error: {s['error']}"]
@@ -1106,6 +1109,39 @@ def write_outputs(rally):
         lines += [f"- {note}" for note in s["owner_notes"]]
     lines += ledger_report(s)
     (out / "final.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def open_question_report(state):
+    """Questions the last hit still asks, kept apart from ones it stopped asking.
+
+    The engine never decides that a question is answered: it only reports which
+    ones survived to the last completed version, so the host can check the rest
+    against the rally and the owner's own notes instead of relisting them all.
+    """
+    hits = state.get("hits") or []
+    if not hits:
+        return []
+    def asked(hit):
+        return [q for q in (str(x).strip() for x in hit["open_questions"]) if q]
+
+    still_open, earlier = [], []
+    for question in asked(hits[-1]):
+        if question not in still_open:
+            still_open.append(question)
+    for hit in hits[:-1]:
+        for question in asked(hit):
+            if question not in still_open and question not in earlier:
+                earlier.append(question)
+    lines = []
+    if still_open:
+        lines += ["", "Questions the last hit still leaves open:"]
+        lines += [f"- {q}" for q in still_open]
+    if earlier:
+        lines += ["", "Questions raised earlier that the last hit no longer asks. Check the final"
+                  " version, the owner notes and the ledger before relisting them; do not invent"
+                  " answers:"]
+        lines += [f"- {q}" for q in earlier]
+    return lines
 
 
 def ledger_report(state):

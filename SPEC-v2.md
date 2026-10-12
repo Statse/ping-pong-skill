@@ -126,8 +126,13 @@ Acceptance:
 - **Supported players (#21): done.** Three CLIs, the mock, and no API transports.
 - **Documented constraint flow (#22): done.** `setup` prints a fresh directory and
   seeds explicit owner constraints; starting uses `--out` with that directory.
-- **Question triage (#12): planned.** Final questions need answered / kept / dropped
-  groups with reasons and deduplication. Current output collects all raised questions.
+- **One refined outcome (#12): implemented.** `/ping-pong "idea"` returns one outcome.
+  An explicit form, language, audience or length in the brief wins; without one the host
+  writes a standalone refined idea. The brief reaches every hit verbatim and the system
+  prompt tells players to honor it. `final.md` repeats the brief, marks a partial rally,
+  and splits the last hit's open questions from ones it stopped asking; the engine never
+  declares a question answered. No answered/kept/dropped schema and no template picker
+  were added, replacing the old question-triage proposal.
 - **Native animation adapters (#16): deferred.** Keep host-neutral behavior and current
   embedding claims accurate. Research in `docs/host-animation-support.md` is historical.
 

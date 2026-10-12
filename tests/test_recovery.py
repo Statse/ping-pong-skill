@@ -80,7 +80,7 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(game.state['status'], 'error')
         rally.write_outputs(game)
         final = (self.directory / 'final.md').read_text()
-        self.assertIn('No completed turns yet', final)
+        self.assertIn('no hit completed', final)
         self.assertIn('context length exceeded', final)
 
     def test_notes_are_ordered_consumed_once_and_persist_after_resume(self):

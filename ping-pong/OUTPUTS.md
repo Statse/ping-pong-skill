@@ -1,6 +1,28 @@
 # Deliverables
 
-Fill each section from the rally's final version. Drop a section only when it truly has nothing to say.
+One rally returns one outcome. Default to **Refined idea**; use one of the shapes below
+only when the brief asks for it, and follow the brief over any template here. Fill each
+section from the rally's final version, the owner brief and the standing decisions.
+Drop a section only when it truly has nothing to say.
+
+## Refined idea (default)
+
+The idea itself, standalone, in the language of the brief. No template picker, no
+interview, no build prompt or ticket spec unless the brief asked for one.
+
+```
+# <name>
+
+<one paragraph: what it is, who it is for, why it is worth doing>
+
+<the concrete parts the rally settled: structure, mechanics, scope, trade-offs>
+
+## First next step
+<the one thing to do next>
+
+## Open questions
+<only the ones genuinely still open; omit the section when there are none>
+```
 
 ## One-shot build prompt
 
@@ -56,6 +78,6 @@ A spec shaped so `/to-tickets` or `/to-issues` can cut it into tracer-bullet tic
 ## Out of scope
 ```
 
-## Non-code idea
+## Another requested form
 
-Pick the form the idea will actually be used in and say which you picked: a plan with milestones, a pitch, a content outline, a creative brief, an event run-sheet. Whatever the form, include: the refined idea in one paragraph, the concrete parts, the first next step, and open questions.
+When the brief names a form this file does not cover, write that form. Pick the shape the idea will actually be used in and say which you picked: a plan with milestones, a pitch, a content outline, a creative brief, an event run-sheet. Whatever the form, include: the refined idea in one paragraph, the concrete parts, the first next step, and open questions.
