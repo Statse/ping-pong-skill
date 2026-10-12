@@ -44,7 +44,15 @@ persistent preference. `assets/` contains the host-neutral component and local a
 Owner notes are queued under `inbox/` as `note-<sequence>.md`, where the claimed
 filename and not a clock fixes submission order. A note's identity is committed with
 its text, so an interruption cannot deliver it twice; delivered files move to
-`inbox/consumed/`. The host produces `deliverable.md` separately.
+`inbox/consumed/`. A note's text is published into its claimed name atomically, so the
+engine never reads a half-written note. The host produces `deliverable.md` separately.
+
+Starting and resuming share one lifecycle: `execute()` runs the remaining turns under a
+single cancellation, error, and finalization policy, `conclude()` writes the terminal
+state, `report_result()` prints the status and maps the exit code, and `Rally.load()` is
+the supported way to restore saved state. `fetch_reply()` owns the whole per-hit request
+policy — one JSON retry, one size rewrite, no retry for a fatal error — while the turn
+loop owns alternation and committing hits.
 
 ## Recovered engine acceptance
 
@@ -101,6 +109,11 @@ Acceptance:
 - **Retry handling (#7): partial.** Unparsed faults, a JSON reminder, and one five-second
   backoff are implemented. The issue also mentions a 20-second delay while allowing
   only one retry; resolve this before changing retry count or closing the issue.
+- **Lifecycle unification (#23): implemented.** New and resumed runs share one
+  execution and finalization path, a loaded rally has an explicit constructor, the
+  per-hit request policy is one operation, and the unused duration average is gone.
+  Externally observable behavior is unchanged except that `final.md` now names an
+  engine error. Tested in `tests/test_lifecycle.py`.
 - **Wall-clock budget (#8): planned.** Bound elapsed time and stop with a partial artifact.
 - **Owner inbox (#11): done.** Persistent prompt notes, `note`, sequence-ordered
   queueing, and exactly-once delivery across interruption and resume are implemented.
