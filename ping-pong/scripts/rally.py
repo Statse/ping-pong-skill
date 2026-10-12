@@ -269,6 +269,63 @@ def seed_owner_ledger(out):
     return entries
 
 
+def new_rally_dir(idea, requested=None):
+    """A directory with no rally in it yet. The host may name it instead of guessing."""
+    # abspath, not resolve: Windows resolve() can hand back a relative path for a
+    # directory that does not exist yet, and the host has to be able to use what we print.
+    if requested:
+        out = pathlib.Path(os.path.abspath(requested))
+        out.mkdir(parents=True, exist_ok=True)
+    else:
+        slug = re.sub(r"[^a-z0-9]+", "-", (idea or "").lower())[:32].strip("-") or "idea"
+        stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        base = pathlib.Path(os.path.abspath(".ping-pong"))
+        base.mkdir(parents=True, exist_ok=True)
+        out = pathlib.Path(tempfile.mkdtemp(prefix=f"{stamp}-{slug}-", dir=base))
+    out = out.resolve()  # safe now that the directory exists
+    if (out / "state.json").exists() or (out / "events.jsonl").exists():
+        raise ValueError(f"rally already exists in {out}; choose a new directory")
+    return out
+
+
+def write_constraints(out, constraints):
+    """Seed constraints.md with the owner's explicit non-negotiables, one per bullet.
+
+    No constraints means no file: an idea without explicit non-negotiables must run
+    with an empty owner ledger rather than with inferred requirements.
+    """
+    items = [" ".join(c.split()) for c in constraints if c and c.strip()]
+    if not items:
+        return []
+    path = pathlib.Path(out) / "constraints.md"
+    if path.exists():
+        raise ValueError(f"{path} already exists; edit it instead of reseeding")
+    path.write_text("".join("- %s\n" % item for item in items), encoding="utf-8")
+    return items
+
+
+def setup_command(argv):
+    ap = argparse.ArgumentParser(
+        prog="rally.py setup",
+        description="Prepare a fresh rally directory and seed owner constraints.")
+    ap.add_argument("--idea", help="the idea, used only to name the directory")
+    ap.add_argument("--idea-file", help="read the naming idea from a file")
+    ap.add_argument("--out", help="use this directory instead of a generated name")
+    ap.add_argument("--constraint", action="append", default=[], metavar="TEXT",
+                    help="an explicit owner non-negotiable; repeat for each one")
+    a = ap.parse_args(argv)
+    try:
+        idea = pathlib.Path(a.idea_file).read_text(encoding="utf-8") if a.idea_file else (a.idea or "")
+        out = new_rally_dir(idea, a.out)
+        write_constraints(out, a.constraint)
+    except (OSError, ValueError) as exc:
+        print(f"Cannot prepare a rally directory: {exc}", file=sys.stderr)
+        return 1
+    # Only the path on stdout, so the host can capture it and pass it to --out.
+    print(out)
+    return 0
+
+
 def ledger_view(ledger, cap=LEDGER_CAP):
     """Entries to render, plus whether owner entries alone exceed the cap.
 
@@ -1095,6 +1152,8 @@ def main():
         except (OSError, ValueError, KeyError) as exc:
             print(f"Cannot add note: {exc}", file=sys.stderr)
             return 1
+    if len(sys.argv) > 1 and sys.argv[1] == "setup":
+        return setup_command(sys.argv[2:])
     if len(sys.argv) > 1 and sys.argv[1] == "doctor":
         return doctor(sys.argv[2:])
     ap = argparse.ArgumentParser(description="Bounce an idea between two LLMs.")
@@ -1102,7 +1161,7 @@ def main():
     ap.add_argument("--idea-file", help="read the idea from a file")
     ap.add_argument("-n", "--iterations", type=int, default=10, help="number of hits (default 10)")
     ap.add_argument("--players", help="two comma-separated specs from cli:claude, cli:codex, cli:cursor")
-    ap.add_argument("--out", help="rally directory (default ./.ping-pong/<timestamp>-<slug>)")
+    ap.add_argument("--out", help="rally directory from `setup` (default ./.ping-pong/<timestamp>-<slug>)")
     display = ap.add_mutually_exclusive_group()
     display.add_argument("--animation", action="store_true", help="expose the embeddable pixel widget locally")
     display.add_argument("--no-animation", action="store_true", help="disable animation for this rally")
@@ -1136,17 +1195,10 @@ def main():
               file=sys.stderr)
         return 1
 
-    slug = re.sub(r"[^a-z0-9]+", "-", idea.lower())[:32].strip("-") or "idea"
-    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-    if a.out:
-        out = pathlib.Path(a.out).resolve()
-        out.mkdir(parents=True, exist_ok=True)
-    else:
-        base = pathlib.Path(".ping-pong").resolve()
-        base.mkdir(parents=True, exist_ok=True)
-        out = pathlib.Path(tempfile.mkdtemp(prefix=f"{stamp}-{slug}-", dir=base))
-    if (out / "state.json").exists() or (out / "events.jsonl").exists():
-        ap.error(f"rally already exists in {out}; choose a new --out directory")
+    try:
+        out = new_rally_dir(idea, a.out)
+    except (OSError, ValueError) as exc:
+        ap.error(str(exc))
     srv = None
     if a.animation and animation_enabled():
         try:

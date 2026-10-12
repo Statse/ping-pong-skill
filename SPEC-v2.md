@@ -38,7 +38,9 @@ and let the owner contribute without losing completed work.
 ## Architecture
 
 `ping-pong/scripts/rally.py` owns players, prompts, state, events, monitoring, notes,
-resume, and final artifacts. `animation.py` owns the optional loopback widget and its
+resume, and final artifacts. Its `setup` subcommand prepares a known fresh rally
+directory and seeds `constraints.md`, so the documented host flow never guesses a
+generated directory name. `animation.py` owns the optional loopback widget and its
 persistent preference. `assets/` contains the host-neutral component and local adapter.
 
 `state.json` is replaced atomically before the matching event is appended to
@@ -122,6 +124,8 @@ Acceptance:
   The owner decision rules out automatic note-to-ledger conversion and phase pauses;
   `O-*` entries come from `constraints.md` only.
 - **Supported players (#21): done.** Three CLIs, the mock, and no API transports.
+- **Documented constraint flow (#22): done.** `setup` prints a fresh directory and
+  seeds explicit owner constraints; starting uses `--out` with that directory.
 - **Question triage (#12): planned.** Final questions need answered / kept / dropped
   groups with reasons and deduplication. Current output collects all raised questions.
 - **Native animation adapters (#16): deferred.** Keep host-neutral behavior and current

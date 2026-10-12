@@ -111,7 +111,7 @@ python3 scripts/rally.py [--idea TEXT | --idea-file PATH] [-n N] [--players A,B]
 | `--idea-file PATH` | — | Read the idea from a file. Use this for anything longer than a sentence. |
 | `-n`, `--iterations N` | `10` | Total alternating turns, not turns per player. `-n 14` is seven each. |
 | `--players A,B` | auto | Exactly two specs, comma-separated. See [PLAYERS.md](ping-pong/PLAYERS.md). |
-| `--out DIR` | `./.ping-pong/<timestamp>-<slug>-<random>` | Where the rally is written. Must not already hold a rally. |
+| `--out DIR` | `./.ping-pong/<timestamp>-<slug>-<random>` | Where the rally is written, normally the directory printed by `setup`. Must not already hold a rally. |
 | `--animation` | off | Expose the optional pixel widget on a loopback port. Nothing opens a browser. |
 | `--no-animation` | — | Disable the display for this one rally. Mutually exclusive with `--animation`. |
 | `--list-players` | — | Print detected players and the auto pick, then exit. |
@@ -120,6 +120,24 @@ Both selected players are preflighted before every rally. Use `doctor --players 
 manually. Each hit tells its agent the remaining count and whether to explore, deepen, or converge.
 Those phases scale to the requested rally length at about 30%, 40%, and 30%. A version that exceeds
 its phase character budget gets one rewrite attempt; any remaining overage is recorded.
+
+### Owner constraints
+
+Owner non-negotiables become `O-*` ledger entries that players cannot drop. Seed them before the
+rally starts. Because the default directory name carries a random suffix, prepare the directory
+first instead of guessing it:
+
+```
+dir=$(python3 scripts/rally.py setup --idea-file idea.md --constraint "must stay free")
+python3 scripts/rally.py --idea-file idea.md -n 10 --out "$dir"
+```
+
+`setup` prints only the directory path, so it can be captured directly. Repeat `--constraint` for
+each requirement; each one becomes a single bullet in `constraints.md`. With no `--constraint` no
+file is written and the rally runs with an empty owner ledger — nothing is inferred into a
+requirement. `setup` refuses a directory that already holds a rally or a `constraints.md`, so an
+existing rally is never overwritten. You can also write `constraints.md` by hand, one bullet per
+line, before starting.
 
 Exit codes: `0` the rally finished, `130` it was cancelled, `1` it ended in an error, `2` the arguments
 or player setup were wrong.
@@ -217,6 +235,7 @@ reported. Interrupted runs can be resumed with the command below.
 |---|---|
 | `~/.ping-pong/settings.json` | Your persistent `animation` preference |
 | `~/.ping-pong/active.json` | Pointer to the most recently started rally, so `status` and `wait` work without `--dir` |
+| `<rally dir>/constraints.md` | Owner non-negotiables, one bullet per line, read once when the rally starts |
 | `<rally dir>/state.json` | Full rally state, rewritten atomically after every transition |
 | `<rally dir>/events.jsonl` | Append-only ordered event log, one JSON object per line |
 | `<rally dir>/inbox/` | Owner notes waiting for the next hit, named `note-<sequence>.md` and consumed in submission order |
