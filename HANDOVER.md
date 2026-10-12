@@ -55,6 +55,19 @@ motion is respected. Native host adapters remain deferred. See `ping-pong/DISPLA
   per hit that changed anything. Resume preserves the stored ledger and does not re-seed it.
   `final.md` lists standing decisions, dropped ones with reasons, and disputes;
   `status` reports the standing count.
+- Unified lifecycle (#23). `execute()` is the one execution path for a new and a
+  resumed rally: it starts the rally if needed, runs the turns, and applies one
+  cancellation/error/finalization policy, so both paths end in a terminal state with a
+  usable `final.md` even before the first completed hit. `conclude()` writes every
+  terminal state, `report_result()` prints status and maps the exit code (done 0,
+  stopped 130, anything else 1), and `terminate_as_cancel()` turns SIGTERM into a
+  cancellation. `Rally.load()` replaced the `__new__` hack as the supported restore
+  path; it defaults missing collections and never re-seeds the ledger. `fetch_reply()`
+  owns the per-hit request policy (one JSON retry, one size rewrite, no retry when
+  fatal) and the loop owns alternation and committing. An engine error is recorded on
+  the rally and in `final.md` instead of being raised past the caller. The unused
+  per-hit duration average and the `expected_s` progress argument are gone; per-hit
+  elapsed seconds are still recorded and printed.
 - Resume keeps completed hits and event IDs. An OS lock prevents simultaneous engines
   writing the same rally. OS locks release automatically when an engine exits or dies.
 - Cancellation and faults leave a usable `final.md`, even before the first completed hit.
@@ -104,7 +117,9 @@ supported until a dedicated cleanup is explicitly chosen.
 Run `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v`.
 The suite includes a real four-hit mock rally, event monitoring, parser fixtures,
 process cleanup, animation preferences, budgets, note delivery and durability,
-resume, locking, and the decision ledger (seeding, cap rendering, disputes, final output, resume delivery).
+resume, locking, and the decision ledger (seeding, cap rendering, disputes, final output, resume delivery),
+and the lifecycle contracts in `tests/test_lifecycle.py` (shared error and cancellation
+policy, exit codes, explicit restore, and the single per-hit request policy).
 
 Each agent needs its own branch and worktree. Give one agent ownership of `rally.py`.
 Do not apply the same stash into multiple active worktrees. Integrate one tested slice

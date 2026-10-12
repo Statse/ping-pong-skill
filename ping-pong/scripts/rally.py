@@ -461,6 +461,7 @@ class Rally:
     def __init__(self, idea, total, players, out, start=True):
         self.out = out
         self.started = False
+        self.error = None
         self.state = {
             "idea": idea, "iterations": total, "players": [p.to_dict() for p in players],
             "hits": [], "faults": [], "owner_notes": [], "consumed_notes": [],
@@ -471,6 +472,21 @@ class Rally:
         }
         if start:
             self.start()
+
+    @classmethod
+    def load(cls, out, state):
+        """A rally restored from its saved state: the supported path for resume.
+
+        Construction must not re-seed the ledger or reset the event stream, so a
+        loaded rally skips __init__ rather than reconstructing its state.
+        """
+        rally = cls.__new__(cls)
+        rally.out, rally.state, rally.started, rally.error = pathlib.Path(out), state, True, None
+        # Keep the ledger a resumed rally already has; never re-seed it.
+        for key, default in (("hits", []), ("faults", []), ("owner_notes", []),
+                             ("consumed_notes", []), ("ledger", []), ("disputes", [])):
+            rally.state.setdefault(key, default)
+        return rally
 
     def start(self):
         # A new rally must not overwrite the state behind an existing event stream.
@@ -620,7 +636,7 @@ def preflight_players(players):
 
 class Progress:
     """Plain process log; visual activity belongs to the optional widget."""
-    def fly(self, n, total, side, expected_s):
+    def fly(self, n, total, side):
         print(f"turn {n}/{total}: player {side + 1} working ...", flush=True)
 
     def land(self, message):
@@ -628,6 +644,19 @@ class Progress:
 
 
 # ---------------------------------------------------------------- main loop
+
+
+@contextmanager
+def terminate_as_cancel():
+    """Treat SIGTERM as a cancellation so a killed engine still finalizes."""
+    def cancel(*_):
+        raise KeyboardInterrupt()
+
+    previous = signal.signal(signal.SIGTERM, cancel)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGTERM, previous)
 
 
 @contextmanager
@@ -657,29 +686,97 @@ def rally_lock(out):
             release()
 
 
-def play(idea, total, players, out, ticker):
-    with rally_lock(out):
-        return _play(idea, total, players, out, ticker)
+def conclude(rally, status, summary):
+    """Record a terminal state once, in one place, for every exit path."""
+    rally.state.update(status=status, current=None, finished_at=_now_ms())
+    rally.save(status, summary=summary)
 
 
-def _play(idea, total, players, out, ticker):
-    rally = Rally(idea, total, players, out, start=False)
+def execute(rally, players, ticker, cancelled="Rally cancelled"):
+    """Play the remaining turns under one cancellation and error policy.
+
+    New and resumed rallies share this path, so both end in a terminal state
+    with a usable `final.md`, including before the first completed hit. An engine
+    error is recorded on the rally rather than raised: the caller reports it.
+
+    A rally that never got as far as its own event stream has no state to
+    finalize, so that failure is raised for the caller to report instead.
+    """
     try:
-        rally.start()
-        return play_turns(rally, idea, total, players, ticker)
+        if not rally.started:
+            rally.start()
+        play_turns(rally, rally.state["idea"], rally.state["iterations"], players, ticker)
     except KeyboardInterrupt:
         if not rally.started:
             raise
-        rally.state.update(status="stopped", current=None, finished_at=_now_ms())
-        rally.save("stopped", summary="Rally cancelled")
-        return rally
-    except Exception:
+        conclude(rally, "stopped", cancelled)
+    except Exception as exc:  # noqa: BLE001 - preserve partial work, then report
         if not rally.started:
             raise
-        rally.state.update(status="error", current=None, finished_at=_now_ms())
-        rally.save("error", summary="Rally interrupted by an engine error")
-        write_outputs(rally)
-        raise
+        rally.state["error"] = str(exc)
+        conclude(rally, "error", f"Engine error: {exc}")
+        rally.error = exc
+    write_outputs(rally)
+    return rally
+
+
+def report_result(rally, stream=sys.stdout):
+    """The shared end-of-run report and exit code for starting and resuming."""
+    print(f"status: {rally.state['status']}", file=stream, flush=True)
+    final = rally.out / "final.md"
+    if final.exists():
+        print(f"final: {final}", file=stream, flush=True)
+    return {"done": 0, "stopped": 130}.get(rally.state["status"], 1)
+
+
+def play(idea, total, players, out, ticker):
+    """Start and run a new rally. Raises only if it never started."""
+    with rally_lock(out):
+        return execute(Rally(idea, total, players, out, start=False), players, ticker)
+
+
+def fetch_reply(me, system, prompt, budget, ticker):
+    """One player's valid, budget-adjusted reply for a single hit.
+
+    This owns the whole request policy: one retry for an unparsed reply after a
+    JSON reminder, one rewrite attempt for an over-budget version, and no retry
+    at all for a fatal error. The rally loop owns which player hits and what is
+    committed. Returns `(reply, error, fatal, over_budget)` with `reply` None
+    when the hit could not be obtained.
+    """
+    reply, err, fatal = None, None, False
+    for attempt in range(2):
+        try:
+            reply = parse_reply(me.call(system, prompt))
+            if not reply["parsed"]:
+                raise RuntimeError("unparseable player response (expected the JSON reply object)")
+            break
+        except Exception as e:  # noqa: BLE001 - surface any transport failure as a fault
+            err = str(e)
+            fatal = is_fatal_player_error(err)
+            reply = None
+            if fatal or attempt == 1:
+                break
+            system += "\nReply with only the JSON object, including a non-empty version."
+            time.sleep(5)
+    if reply is None:
+        return None, err, fatal, False
+    over_budget = len(reply["version"]) > budget
+    if not over_budget:
+        return reply, err, fatal, False
+    ticker.land(f"  size limit: {me.label} returned {len(reply['version'])} characters; retrying within {budget}")
+    retry_system = system + "\nYour previous version exceeded the character limit. Return the complete version again, cut to the stated maximum."
+    retry_user = prompt + "\n---\nYour previous over-budget version to revise:\n" + reply["version"]
+    try:
+        retry = parse_reply(me.call(retry_system, retry_user))
+        if retry["parsed"]:
+            reply = retry
+            over_budget = len(reply["version"]) > budget
+    except Exception as e:  # noqa: BLE001 - keep valid output unless the error is fatal
+        if is_fatal_player_error(str(e)):
+            return None, str(e), True, False
+        ticker.land(f"  size-limit retry failed; keeping first valid reply: {e}")
+    return reply, err, fatal, over_budget
 
 
 def play_turns(rally, idea, total, players, ticker):
@@ -687,14 +784,13 @@ def play_turns(rally, idea, total, players, ticker):
     prev = hits[-1] if hits else None
     current = rally.state.get("current") or {}
     side = current.get("side", rally.state.get("next_side", (prev["side"] ^ 1) if prev else 0))
-    durations, consecutive_faults = [], 0
+    consecutive_faults = 0
     n = len(hits) + 1
     while n <= total:
         me, them = players[side], players[1 - side]
         rally.state["current"] = {"n": n, "side": side, "started_at": _now_ms()}
         rally.save()
-        expected = sum(durations) / len(durations) if durations else 30
-        ticker.fly(n, total, side, expected)
+        ticker.fly(n, total, side)
         notes = consume_notes(rally)
         phase = phase_for(n, total)
         incoming_size = len(prev["version"]) if prev else max(120, len(idea))
@@ -704,37 +800,7 @@ def play_turns(rally, idea, total, players, ticker):
                                phase=PHASES[phase], budget=budget)
         prompt = user_prompt(idea, prev, them.label, notes, rally.state.setdefault("ledger", []))
         t0 = time.time()
-        reply, err, fatal = None, None, False
-        for attempt in range(2):
-            try:
-                reply = parse_reply(me.call(system, prompt))
-                if not reply["parsed"]:
-                    raise RuntimeError("unparseable player response (expected the JSON reply object)")
-                break
-            except Exception as e:  # noqa: BLE001 - surface any transport failure as a fault
-                err = str(e)
-                fatal = is_fatal_player_error(err)
-                reply = None
-                if fatal or attempt == 1:
-                    break
-                system += "\nReply with only the JSON object, including a non-empty version."
-                time.sleep(5)
-        if reply is not None:
-            over_budget = len(reply["version"]) > budget
-            if over_budget:
-                ticker.land(f"  size limit: {me.label} returned {len(reply['version'])} characters; retrying within {budget}")
-                retry_system = system + "\nYour previous version exceeded the character limit. Return the complete version again, cut to the stated maximum."
-                try:
-                    retry_user = prompt + "\n---\nYour previous over-budget version to revise:\n" + reply["version"]
-                    retry = parse_reply(me.call(retry_system, retry_user))
-                    if retry["parsed"]:
-                        reply = retry
-                        over_budget = len(reply["version"]) > budget
-                except Exception as e:  # noqa: BLE001 - keep valid output unless the error is fatal
-                    if is_fatal_player_error(str(e)):
-                        err, fatal, reply = str(e), True, None
-                    else:
-                        ticker.land(f"  size-limit retry failed; keeping first valid reply: {e}")
+        reply, err, fatal, over_budget = fetch_reply(me, system, prompt, budget, ticker)
         took = time.time() - t0
         if reply is None:
             consecutive_faults += 1
@@ -743,25 +809,18 @@ def play_turns(rally, idea, total, players, ticker):
             rally.state["next_side"] = side if fatal else 1 - side
             rally.save("fault", n=n, side=side, summary=f"{me.label}: {err}")
             if fatal:
-                rally.state["status"] = "error"
-                rally.state["current"] = None
-                rally.state["finished_at"] = _now_ms()
-                rally.save("error", summary=f"Fatal player error; stopped immediately: {err}")
+                conclude(rally, "error", f"Fatal player error; stopped immediately: {err}")
                 ticker.land(f"  fatal error: stopping immediately; {me.label}: {err}")
                 return rally
             ticker.land(f"  fault: {me.label} could not return hit {n}: {err}")
             if consecutive_faults >= 2:
                 rally.state["next_side"] = side
-                rally.state["status"] = "error"
-                rally.state["current"] = None
-                rally.state["finished_at"] = _now_ms()
-                rally.save("error", summary="Rally stopped after two consecutive faults")
+                conclude(rally, "error", "Rally stopped after two consecutive faults")
                 ticker.land("  stopping: both players failed consecutive turns; partial result is saved")
                 return rally
             side = rally.state["next_side"]  # opponent takes the hit
             continue
         consecutive_faults = 0
-        durations.append(took)
         hit = {"n": n, "side": side, "player": me.label, "seconds": round(took, 1), **reply,
                "phase": phase, "size_budget": budget, "over_budget": over_budget,
                **drift(prev["version"] if prev else None, reply["version"])}
@@ -781,10 +840,7 @@ def play_turns(rally, idea, total, players, ticker):
                     + (f": {hit['changes'][0]}" if hit["changes"] else "")
                     + (f" [{measured}]" if measured else ""))
         prev, side, n = hit, 1 - side, n + 1
-    rally.state["status"] = "done"
-    rally.state["current"] = None
-    rally.state["finished_at"] = _now_ms()
-    rally.save("done", summary=f"Rally finished: {len(rally.state['hits'])} hits")
+    conclude(rally, "done", f"Rally finished: {len(rally.state['hits'])} hits")
     return rally
 
 
@@ -998,31 +1054,16 @@ def resume_rally(out):
     if not preflight_players(players):
         print("Resume stopped: player preflight failed. Fix the issue, then try again.", file=sys.stderr)
         return 1
-    rally = Rally.__new__(Rally)
-    rally.out, rally.state, rally.started = out, state, True
-    # Keep the ledger a resumed rally already has; never re-seed it from constraints.md.
-    rally.state.setdefault("ledger", [])
-    rally.state.setdefault("disputes", [])
+    rally = Rally.load(out, state)
     rally.state["status"] = "running"
     rally.state["finished_at"] = None
     rally.save("resume", summary=f"Resuming at hit {len(state['hits']) + 1}/{state['iterations']}")
     set_active(out)
-    previous_term = signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
-    try:
-        rally = play_turns(rally, state["idea"], state["iterations"], players, Progress())
-    except KeyboardInterrupt:
-        rally.state.update(status="stopped", current=None, finished_at=_now_ms())
-        rally.save("stopped", summary="Rally paused by user")
-    except Exception as exc:  # noqa: BLE001 - preserve partial work
-        rally.state.update(status="error", current=None, finished_at=_now_ms())
-        rally.save("error", summary=f"Engine error: {exc}")
-        print(f"Rally stopped after an engine error: {exc}", file=sys.stderr)
-    finally:
-        signal.signal(signal.SIGTERM, previous_term)
-    write_outputs(rally)
-    print(f"status: {rally.state['status']}")
-    print(f"final: {out / 'final.md'}")
-    return 0 if rally.state["status"] == "done" else 130 if rally.state["status"] == "stopped" else 1
+    with terminate_as_cancel():
+        rally = execute(rally, players, Progress(), cancelled="Rally paused by user")
+    if rally.error:
+        print(f"Rally stopped after an engine error: {rally.error}", file=sys.stderr)
+    return report_result(rally)
 
 
 def write_outputs(rally):
@@ -1052,6 +1093,8 @@ def write_outputs(rally):
     else:
         lines = ["# Ping-pong rally", "", "No completed turns yet."]
     lines += ["", f"Status: {s['status']}."]
+    if s.get("error"):
+        lines += ["", f"The engine stopped with an error: {s['error']}"]
     if s.get("faults"):
         lines += ["", "Player errors:"]
         lines += [f"- Hit {f['n']}, {f['player']}: {f['error']}" for f in s["faults"]]
@@ -1163,22 +1206,18 @@ def main():
 
     print(f"rally: {players[0].label} vs {players[1].label}, {a.iterations} hits", flush=True)
     print(f"dir: {out}", flush=True)
-    previous_term = signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
     try:
-        try:
-            rally = play(idea.strip(), a.iterations, players, out, Progress())
-        except Exception as exc:  # noqa: BLE001 - leave and report any partial artifact
-            print(f"Rally stopped by an engine error: {exc}", file=sys.stderr)
-            if (out / "final.md").exists():
-                print(f"partial result: {out / 'final.md'}", file=sys.stderr)
-            return 1
-        write_outputs(rally)
-        print(f"status: {rally.state['status']}", flush=True)
-        if (out / "final.md").exists():
-            print(f"final: {out / 'final.md'}", flush=True)
-        return 0 if rally.state["status"] == "done" else 130 if rally.state["status"] == "stopped" else 1
+        with terminate_as_cancel():
+            try:
+                rally = play(idea.strip(), a.iterations, players, out, Progress())
+            except (OSError, ValueError) as exc:
+                # The rally never started, so there is no state to finalize.
+                print(f"Rally could not start: {exc}", file=sys.stderr)
+                return 1
+        if rally.error:
+            print(f"Rally stopped by an engine error: {rally.error}", file=sys.stderr)
+        return report_result(rally)
     finally:
-        signal.signal(signal.SIGTERM, previous_term)
         if srv:
             srv.shutdown()
             srv.server_close()

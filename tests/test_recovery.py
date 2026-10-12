@@ -212,9 +212,7 @@ class OwnerNoteDurabilityTests(unittest.TestCase):
     def reload(self):
         """A fresh engine over the committed state, as resume builds one."""
         _, state = rally.load_state(self.directory)
-        game = rally.Rally.__new__(rally.Rally)
-        game.out, game.state, game.started = self.directory, state, True
-        return game
+        return rally.Rally.load(self.directory, state)
 
     def note_events(self):
         events = [json.loads(line) for line in
