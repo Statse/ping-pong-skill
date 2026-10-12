@@ -25,7 +25,7 @@ to install, no API key required if you are already logged into an agent CLI.
 
 The skill is the `ping-pong/` folder. Put it in your host's skills directory.
 
-### Option A — drop in the zip (Claude Code, Cursor, Codex, OpenCode)
+### Option A — drop in the zip (Claude Code, Cursor, Codex)
 
 Build the bundle:
 
@@ -40,7 +40,6 @@ Then unzip it into your host's skills directory:
 | Claude Code | `~/.claude/skills/` |
 | Cursor | `~/.cursor/skills/` (also reads `~/.claude/skills/`) |
 | Codex | `~/.codex/skills/` |
-| OpenCode | `~/.config/opencode/skills/` |
 
 ```sh
 unzip dist/ping-pong-skill.zip -d ~/.claude/skills/
@@ -59,8 +58,8 @@ mkdir -p ~/.codex/skills
 cp -R ping-pong-skill/ping-pong ~/.codex/skills/
 ```
 
-For Claude Code, replace `~/.codex/skills` with `~/.claude/skills`. For Cursor, use
-`~/.cursor/skills`; for OpenCode, use `~/.config/opencode/skills`.
+For Claude Code, replace `~/.codex/skills` with `~/.claude/skills`; for Cursor, use
+`~/.cursor/skills`.
 
 ### Verify the install
 
@@ -129,16 +128,16 @@ or player setup were wrong.
 
 A spec is `kind:name[:model]`. The short version:
 
-- **Agent CLIs** — `cli:claude`, `cli:codex`, `cli:cursor`, `cli:opencode`, `cli:copilot`,
-  `cli:gemini`, or `cli:<any-command>`. No API key needed if you are logged in. Each call runs in a
-  fresh temp directory so the CLI cannot touch your repo.
-- **APIs** — `anthropic:<model>`, `openai:<model>`, `gemini:<model>`, `openrouter:<vendor/model>`,
-  each needing its key in the environment.
+- **Agent CLIs** — `cli:claude`, `cli:codex`, or `cli:cursor`, each optionally with `:<model>`. No
+  API key needed if you are logged in. Each call runs in a fresh temp directory so the CLI cannot
+  touch your repo.
 - **Testing** — `mock:left`, `mock:right` return canned replies after a short delay.
 
-Without `--players`, the engine detects CLIs first, then API keys, and prefers two different vendors.
-With only Claude available it plays Opus against Sonnet. Full tables, model overrides and the
-auto-pick rules are in [PLAYERS.md](ping-pong/PLAYERS.md).
+These three CLIs are the whole list: there is no API transport and no arbitrary-command player, and
+an unsupported spec is rejected before any provider request. Without `--players` the rally is Claude
+against Codex; if that pair is not installed, two detected CLIs are used, and with fewer than two the
+engine reports the missing CLI rather than substituting a provider. Two sessions of the same CLI are
+allowed as an explicit choice. Details are in [PLAYERS.md](ping-pong/PLAYERS.md).
 
 ### Following a rally
 
@@ -199,23 +198,13 @@ malformed settings file is treated as off — a broken preference must not force
 
 ### Environment variables
 
-| Variable | Purpose |
-|---|---|
-| `ANTHROPIC_API_KEY` | Required for `anthropic:` players |
-| `OPENAI_API_KEY` | Required for `openai:` players |
-| `GEMINI_API_KEY` | Required for `gemini:` players |
-| `OPENROUTER_API_KEY` | Required for `openrouter:` players |
-| `PINGPONG_ANTHROPIC_MODEL` | Default model for `anthropic:` without an explicit model |
-| `PINGPONG_OPENAI_MODEL` | Default model for `openai:` |
-| `PINGPONG_GEMINI_MODEL` | Default model for `gemini:` |
-| `PINGPONG_OPENROUTER_MODEL` | Default model for `openrouter:` |
-
-Agent CLI players need no variables — they use whatever login the CLI already has. Model names change
-often; if a built-in default is rejected, set the variable or name the model in the spec.
+The engine reads no variables of its own. Players are agent CLIs, so they use whatever login the CLI
+already has, and provider API keys in the environment are ignored entirely — they affect neither
+detection nor selection. To change a model, name it in the spec (`cli:claude:opus`).
 
 ### Timeouts and limits
 
-These are fixed in the engine rather than configurable: 1800 s per CLI call and 900 s per API call.
+This is fixed in the engine rather than configurable: 1800 s per CLI call.
 Recoverable call failures retry once after a five-second delay, then the opponent covers the hit; two consecutive faults stop
 the rally. Authentication, unknown-model, and token/context-limit errors stop immediately and are
 reported. Interrupted runs can be resumed with the command below.
@@ -250,8 +239,12 @@ Resume refuses to start while another engine holds that rally’s process lock.
 
 ## Troubleshooting
 
-**"Need exactly two players"** — fewer than two player specs were detected. Set up two CLIs or API
-providers, or pass `--players A,B`. [PLAYERS.md](ping-pong/PLAYERS.md) has setup instructions.
+**"Need exactly two players"** — fewer than two supported CLIs were detected. The message names what
+was found and which default CLI is missing. Install a second supported CLI, or pass `--players A,B`
+(two sessions of the same CLI are fine). [PLAYERS.md](ping-pong/PLAYERS.md) has setup instructions.
+
+**"Invalid player spec"** — the spec names a kind or CLI that is not supported. Only `cli:claude`,
+`cli:codex`, `cli:cursor` and `mock:<name>` exist; API transports were removed.
 
 **Preflight failed** — a selected player could not authenticate, reach its model, or return valid JSON.
 Fix the reported issue and start again; the rally has not begun.

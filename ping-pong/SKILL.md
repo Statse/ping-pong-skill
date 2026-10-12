@@ -13,7 +13,7 @@ Arguments: the **idea** (text or a file path) and the **iterations** (total alte
 
 1. **Take the arguments.** If the idea is missing, ask for it. Write it to `idea.md` in the working directory if it is longer than a sentence or two. Done when you have the idea and a hit count.
 
-2. **Pick and preflight the players.** Run `python3 scripts/rally.py --list-players` (paths are relative to this skill's folder). If the user named models, use their specs; otherwise accept the auto pick. The engine preflights both selected players automatically when starting. Use `python3 scripts/rally.py doctor --players a,b` only for a separate diagnostic check; it sends additional provider requests. If preflight fails, report the issue.
+2. **Pick and preflight the players.** Run `python3 scripts/rally.py --list-players` (paths are relative to this skill's folder). Supported players are `cli:claude`, `cli:codex` and `cli:cursor`; the default pair is Claude then Codex, and two sessions of one CLI are fine if asked for. If the user named models, use their specs; otherwise accept the auto pick. If a CLI is missing, report which one and the supported alternatives; never substitute another provider. The engine preflights both selected players automatically when starting. Use `python3 scripts/rally.py doctor --players a,b` only for a separate diagnostic check; it sends additional provider requests. If preflight fails, report the issue.
 
 3. **Start the rally** in the background, so the long run does not hit a tool timeout:
    ```
@@ -36,7 +36,7 @@ Arguments: the **idea** (text or a file path) and the **iterations** (total alte
 
 ## Install
 
-Copy the `ping-pong` folder to the host's skills directory: `~/.claude/skills/` (Claude Code; Cursor also reads it), `~/.codex/skills/`, `~/.cursor/skills/`, or `~/.config/opencode/skills/`. Needs Python 3.
+Copy the `ping-pong` folder to the host's skills directory: `~/.claude/skills/` (Claude Code; Cursor also reads it), `~/.codex/skills/`, or `~/.cursor/skills/`. Needs Python 3.
 
 ## Dry run
 

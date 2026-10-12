@@ -28,7 +28,9 @@ and let the owner contribute without losing completed work.
 - Preflight the selected pair with small format calls. A cache/model-enumeration product
   is deferred; automatic preflight does not require a separate doctor invocation.
 - The host chooses the final output using `OUTPUTS.md`, without a shape schema or vote.
-- Retain current API and extra CLI transports pending a separately chosen cleanup.
+- Players are only the Claude, Codex and Cursor CLIs, defaulting to Claude then Codex,
+  plus the internal mock. The API transports and extra CLI players were removed in #21;
+  this supersedes the earlier decision to retain them.
 - Display is an optional decorative pixel loop under #16. No scores, court panels,
   replay, automatic external browser, or host configuration installers.
 - macOS/Linux are the local target; Windows is best-effort through credential-free CI.
@@ -119,6 +121,7 @@ Acceptance:
   queueing, and exactly-once delivery across interruption and resume are implemented.
   The owner decision rules out automatic note-to-ledger conversion and phase pauses;
   `O-*` entries come from `constraints.md` only.
+- **Supported players (#21): done.** Three CLIs, the mock, and no API transports.
 - **Question triage (#12): planned.** Final questions need answered / kept / dropped
   groups with reasons and deduplication. Current output collects all raised questions.
 - **Native animation adapters (#16): deferred.** Keep host-neutral behavior and current

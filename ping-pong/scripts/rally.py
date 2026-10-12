@@ -26,27 +26,13 @@ import subprocess
 import sys
 import tempfile
 import time
-import urllib.error
-import urllib.request
 
 HERE = pathlib.Path(__file__).resolve().parent
-API_KINDS = ("anthropic", "openai", "gemini", "openrouter")
-DEFAULT_MODELS = {
-    "anthropic": os.environ.get("PINGPONG_ANTHROPIC_MODEL", "claude-sonnet-5-5"),
-    "openai": os.environ.get("PINGPONG_OPENAI_MODEL", "gpt-5"),
-    "gemini": os.environ.get("PINGPONG_GEMINI_MODEL", "gemini-2.5-pro"),
-    "openrouter": os.environ.get("PINGPONG_OPENROUTER_MODEL", "openai/gpt-5"),
-}
-KEY_ENV = {
-    "anthropic": "ANTHROPIC_API_KEY",
-    "openai": "OPENAI_API_KEY",
-    "gemini": "GEMINI_API_KEY",
-    "openrouter": "OPENROUTER_API_KEY",
-}
-CLI_LABELS = {"claude": "Claude Code", "codex": "Codex", "gemini": "Gemini CLI",
-              "cursor": "Cursor", "opencode": "OpenCode", "copilot": "Copilot"}
-CLI_VENDOR = {"claude": "anthropic", "codex": "openai", "gemini": "gemini",
-              "cursor": "cursor", "opencode": "opencode", "copilot": "github"}
+# The three supported agent CLIs, in detection order. The default pair is Claude then
+# Codex; `mock` stays available for credential-free development.
+CLI_LABELS = {"claude": "Claude Code", "codex": "Codex", "cursor": "Cursor"}
+SUPPORTED_CLIS = tuple(CLI_LABELS)
+DEFAULT_PAIR = ("cli:claude", "cli:codex")
 ACTIVE = pathlib.Path.home() / ".ping-pong" / "active.json"
 ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 LEDGER_CAP = 25          # entries rendered into a prompt; owner entries are never evicted
@@ -70,19 +56,20 @@ class Player:
         self.kind = parts[0]
         if self.kind == "cli":
             if len(parts) < 2 or not parts[1]:
-                raise ValueError(f"cli player needs a tool name: {spec}")
+                raise ValueError(f"cli player needs a tool name: {spec}; "
+                                 f"supported: {supported_specs()}")
             self.tool = parts[1]
+            if self.tool not in CLI_LABELS:
+                raise ValueError(f"unsupported CLI '{self.tool}' in {spec}; "
+                                 f"supported: {supported_specs()}")
             self.model = parts[2] if len(parts) > 2 else None
-            base = CLI_LABELS.get(self.tool, self.tool)
-        elif self.kind in API_KINDS:
-            self.tool = None
-            self.model = ":".join(parts[1:]) or DEFAULT_MODELS[self.kind]
-            base = self.model
+            base = CLI_LABELS[self.tool]
         elif self.kind == "mock":
             self.tool, self.model = None, None
             base = f"Mock {parts[1] if len(parts) > 1 else ''}".strip()
         else:
-            raise ValueError(f"unknown player kind '{self.kind}' in {spec}")
+            raise ValueError(f"unknown player kind '{self.kind}' in {spec}; "
+                             f"supported: {supported_specs()}")
         self.label = f"{base} ({self.model})" if self.kind == "cli" and self.model else base
 
     def to_dict(self):
@@ -91,86 +78,45 @@ class Player:
     def call(self, system, user):
         if self.kind == "mock":
             return _mock(system, user)
-        if self.kind == "cli":
-            return _cli(self.tool, self.model, system, user)
-        return _api(self.kind, self.model, system, user)
+        return _cli(self.tool, self.model, system, user)
+
+
+def supported_specs():
+    return ", ".join("cli:%s" % tool for tool in SUPPORTED_CLIS)
 
 
 def detect_players():
-    found = []
-    for tool in ("claude", "codex", "cursor", "opencode", "copilot", "gemini"):
-        if cli_bin(tool):
-            found.append(f"cli:{tool}")
-    for kind in API_KINDS:
-        if os.environ.get(KEY_ENV[kind]):
-            found.append(f"{kind}:{DEFAULT_MODELS[kind]}")
-    return found
+    """Installed supported CLIs. API keys never affect detection or selection."""
+    return [f"cli:{tool}" for tool in SUPPORTED_CLIS if cli_bin(tool)]
 
 
 def auto_pick(found):
-    """Two players, preferring different vendors."""
-    def vendor(spec):
-        kind, _, rest = spec.partition(":")
-        return CLI_VENDOR.get(rest.split(":")[0], rest) if kind == "cli" else kind
-    picked = []
-    for s in found:
-        if not picked or vendor(s) != vendor(picked[0]):
-            picked.append(s)
-        if len(picked) == 2:
-            return picked
-    if len(picked) == 1:  # one vendor only: split it into two different models
-        only = picked[0]
-        if only == "cli:claude":
-            return ["cli:claude:opus", "cli:claude:sonnet"]
-        if only.startswith("anthropic:"):
-            return ["anthropic:claude-opus-5-5", "anthropic:claude-sonnet-5-5"]
-    return picked
+    """The default pair when it is installed, otherwise two detected CLIs.
+
+    Never substitutes a model alias and never pairs one CLI with itself: two
+    sessions of the same CLI are a valid rally, but only as an explicit choice.
+    """
+    if all(spec in found for spec in DEFAULT_PAIR):
+        return list(DEFAULT_PAIR)
+    return found[:2]
+
+
+def missing_players_message(found):
+    """Why no pair could be chosen, and what the user can do about it."""
+    missing = ", ".join(CLI_LABELS[spec.split(":")[1]] for spec in DEFAULT_PAIR
+                        if spec not in found)
+    lines = ["Detected: " + (", ".join(found) or "no supported player CLI")]
+    if missing:
+        lines.append(f"The default pair is Claude then Codex; not installed: {missing}.")
+    lines.append("Install a second supported CLI (%s), or choose a pair with"
+                 " --players, e.g. --players %s,%s for two independent sessions of"
+                 " the same CLI. See PLAYERS.md."
+                 % (supported_specs(), found[0] if found else DEFAULT_PAIR[0],
+                    found[0] if found else DEFAULT_PAIR[0]))
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------- transports
-
-
-def _post(url, body, headers, timeout=900):
-    req = urllib.request.Request(
-        url, data=json.dumps(body).encode(), method="POST",
-        headers={"Content-Type": "application/json", **headers})
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            return json.loads(r.read())
-    except urllib.error.HTTPError as e:
-        raise RuntimeError(f"HTTP {e.code} from {url.split('?')[0]}: "
-                           f"{e.read().decode(errors='replace')[:400]}") from None
-
-
-def _api(kind, model, system, user):
-    key = os.environ.get(KEY_ENV[kind])
-    if not key:
-        raise RuntimeError(f"{KEY_ENV[kind]} is not set")
-    if kind == "anthropic":
-        r = _post("https://api.anthropic.com/v1/messages",
-                  {"model": model, "max_tokens": 8000, "system": system,
-                   "messages": [{"role": "user", "content": user}]},
-                  {"x-api-key": key, "anthropic-version": "2023-06-01"})
-        if r.get("stop_reason") == "max_tokens":
-            raise RuntimeError("token limit reached (Anthropic stop_reason=max_tokens)")
-        return "".join(b.get("text", "") for b in r["content"] if b.get("type") == "text")
-    if kind in ("openai", "openrouter"):
-        base = "https://api.openai.com/v1" if kind == "openai" else "https://openrouter.ai/api/v1"
-        r = _post(f"{base}/chat/completions",
-                  {"model": model, "messages": [{"role": "system", "content": system},
-                                                {"role": "user", "content": user}]},
-                  {"Authorization": f"Bearer {key}"})
-        if r.get("choices") and r["choices"][0].get("finish_reason") == "length":
-            raise RuntimeError("token limit reached (provider finish_reason=length)")
-        return r["choices"][0]["message"]["content"]
-    if kind == "gemini":
-        r = _post(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}",
-                  {"systemInstruction": {"parts": [{"text": system}]},
-                   "contents": [{"role": "user", "parts": [{"text": user}]}]}, {})
-        if r.get("candidates") and r["candidates"][0].get("finishReason") == "MAX_TOKENS":
-            raise RuntimeError("token limit reached (Gemini finishReason=MAX_TOKENS)")
-        return "".join(p.get("text", "") for p in r["candidates"][0]["content"]["parts"])
-    raise RuntimeError(f"no transport for {kind}")
 
 
 def _cli(tool, model, system, user):
@@ -180,7 +126,6 @@ def _cli(tool, model, system, user):
         raise RuntimeError(f"'{tool}' is not on PATH")
     workdir = tempfile.mkdtemp(prefix="pingpong-")  # keep agent CLIs away from the user's repo
     out_file = os.path.join(workdir, "last.txt")
-    stdin = None
     m = lambda flag: [flag, model] if model else []
     if tool == "claude":
         cmd = [exe] + m("--model") + ["-p", prompt]
@@ -188,16 +133,10 @@ def _cli(tool, model, system, user):
         cmd = [exe, "exec", "--skip-git-repo-check", "--output-last-message", out_file] + m("-m") + [prompt]
     elif tool == "cursor":
         cmd = [exe, "-p", "--trust", "--mode", "ask", "--output-format", "text"] + m("--model") + [prompt]
-    elif tool == "opencode":
-        cmd = [exe, "run"] + m("-m") + [prompt]
-    elif tool == "copilot":
-        cmd = [exe, "-s"] + m("--model") + ["-p", prompt]
-    elif tool == "gemini":
-        cmd = [exe] + m("-m") + ["-p", prompt]
-    else:  # any other command: prompt on stdin, answer on stdout
-        cmd, stdin = [exe], prompt
+    else:
+        raise RuntimeError(f"unsupported CLI '{tool}'; supported: {supported_specs()}")
     try:
-        p = run_cli(cmd, stdin, workdir, timeout=1800)
+        p = run_cli(cmd, None, workdir, timeout=1800)
         if p.returncode != 0:
             raise RuntimeError(
                 f"{tool} exited {p.returncode} ({format_command(cmd)}): "
@@ -598,11 +537,12 @@ def doctor(argv):
     ap = argparse.ArgumentParser(prog="rally.py doctor", description="Check installed player CLIs.")
     ap.add_argument("--players", help="two comma-separated player specs")
     args = ap.parse_args(argv)
-    specs = [s.strip() for s in args.players.split(",")] if args.players else auto_pick(detect_players())
+    found = detect_players()
+    specs = [s.strip() for s in args.players.split(",")] if args.players else auto_pick(found)
     if len(specs) != 2:
-        if not specs:
-            print("No player CLIs or API providers found. Set up two players; see PLAYERS.md.",
-                  file=sys.stderr)
+        if not args.players:
+            print("No player CLIs found to preflight.", file=sys.stderr)
+            print(missing_players_message(found), file=sys.stderr)
         else:
             print("Need exactly two players to preflight; see PLAYERS.md.", file=sys.stderr)
         return 1
@@ -1161,7 +1101,7 @@ def main():
     ap.add_argument("--idea", help="the idea as text")
     ap.add_argument("--idea-file", help="read the idea from a file")
     ap.add_argument("-n", "--iterations", type=int, default=10, help="number of hits (default 10)")
-    ap.add_argument("--players", help="two comma-separated specs, e.g. cli:claude,cli:codex")
+    ap.add_argument("--players", help="two comma-separated specs from cli:claude, cli:codex, cli:cursor")
     ap.add_argument("--out", help="rally directory (default ./.ping-pong/<timestamp>-<slug>)")
     display = ap.add_mutually_exclusive_group()
     display.add_argument("--animation", action="store_true", help="expose the embeddable pixel widget locally")
@@ -1180,12 +1120,17 @@ def main():
         ap.error("give --idea or --idea-file")
     if a.iterations < 1:
         ap.error("--iterations must be at least 1")
-    specs = [s for s in (a.players.split(",") if a.players else auto_pick(detect_players())) if s.strip()]
+    found = detect_players()
+    specs = [s for s in (a.players.split(",") if a.players else auto_pick(found)) if s.strip()]
     if len(specs) != 2:
-        print("Need exactly two players; found: " + (", ".join(specs) or "none")
-              + ". See PLAYERS.md for setup.", file=sys.stderr)
+        print("Need exactly two players; no player CLIs pair was available.", file=sys.stderr)
+        print(missing_players_message(found), file=sys.stderr)
         return 2
-    players = [Player(s) for s in specs]
+    try:
+        players = [Player(s) for s in specs]
+    except ValueError as exc:
+        print(f"Invalid player spec: {exc}", file=sys.stderr)
+        return 2
     if not preflight_players(players):
         print("Rally not started: player preflight failed. Fix the issue or choose different players.",
               file=sys.stderr)
