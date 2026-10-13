@@ -136,10 +136,15 @@ def _cli(tool, model, system, user):
     else:
         raise RuntimeError(f"unsupported CLI '{tool}'; supported: {supported_specs()}")
     try:
-        p = run_cli(cmd, None, workdir, timeout=1800)
+        try:
+            p = run_cli(cmd, None, workdir, timeout=1800)
+        except subprocess.TimeoutExpired as exc:
+            # TimeoutExpired includes argv (and hence the whole prompt) in str().
+            # Keep user content out of the diagnostic used for fatal classification.
+            raise RuntimeError(f"{tool} timed out after {exc.timeout} seconds") from exc
         if p.returncode != 0:
             raise RuntimeError(
-                f"{tool} exited {p.returncode} ({format_command(cmd)}): "
+                f"{tool} exited {p.returncode}: "
                 f"{(p.stderr or p.stdout)[-400:]}")
         if tool == "codex" and os.path.exists(out_file):
             return pathlib.Path(out_file).read_text(encoding="utf-8")
@@ -209,6 +214,7 @@ How to return the ball:
 - Keep what is strong. Name what is weak, vague, risky or missing, and fix it in your version.
 - Refine the current version rather than restarting it; keep concrete details unless you have a reason to drop them.
 - Never silently remove or contradict an explicit owner requirement. If you think one should change, preserve it and report the conflict with a reason for the owner.
+- Review the previous hit's open questions and requirement conflicts. Carry unresolved ones forward; do not invent owner answers or treat a proposed change as approval.
 - Honour the decision ledger in the prompt. `O-*` entries are owner non-negotiables: you cannot drop them, only report a conflict. Add a `P-*` decision for anything you commit to, and drop one only with a reason.
 - Your version must stand alone: someone who reads only it gets the whole idea.
 - Write in the language of the owner's original idea.
@@ -389,9 +395,16 @@ def user_prompt(idea, prev, them, owner_notes=None, ledger=None):
     if prev is None:
         return head + "\nYou serve: there is no previous version yet. Write the first version."
     changes = "\n".join(f"- {c}" for c in prev["changes"]) or "- (none listed)"
+    questions = "\n".join(f"- {q}" for q in prev.get("open_questions", [])) or "- (none listed)"
+    conflicts = "\n".join(
+        f"- {c.get('item', 'requirement')}: {c.get('reason', 'no reason supplied')}"
+        for c in prev.get("owner_conflicts", [])) or "- (none listed)"
     return (f"{head}\n---\nCurrent version (from {them}, hit {prev['n']}):\n\n{prev['version']}\n"
             f"\n---\n{them}'s notes on the version before:\n{prev['critique'] or '(none)'}\n"
-            f"\nChanges {them} made:\n{changes}\n")
+            f"\nChanges {them} made:\n{changes}\n"
+            f"\nOpen questions from the previous hit (carry forward if unresolved):\n{questions}\n"
+            "\nRequirement conflicts from the previous hit (proposals, not owner approval;"
+            f" preserve the requirements):\n{conflicts}\n")
 
 
 def parse_reply(text):
@@ -404,14 +417,28 @@ def parse_reply(text):
     for c in candidates:
         try:
             d = json.loads(c)
-            if isinstance(d, dict) and d.get("version"):
-                return {"critique": str(d.get("critique", "")),
-                        "version": str(d["version"]),
-                        "changes": [str(x) for x in d.get("changes") or []],
-                        "open_questions": [str(x) for x in d.get("open_questions") or []],
-                        "owner_conflicts": [x for x in d.get("owner_conflicts") or [] if isinstance(x, dict)],
-                        "decisions": ledger_ops(d.get("decisions")),
-                        "parsed": True}
+            if (not isinstance(d, dict) or not isinstance(d.get("version"), str)
+                    or not d["version"].strip()):
+                continue
+            critique = d.get("critique", "")
+            changes = d.get("changes", [])
+            questions = d.get("open_questions", [])
+            conflicts = d.get("owner_conflicts", [])
+            if not isinstance(critique, str):
+                continue
+            if any(not isinstance(items, list) or any(not isinstance(x, str) for x in items)
+                   for items in (changes, questions)):
+                continue
+            if (not isinstance(conflicts, list) or any(
+                    not isinstance(x, dict)
+                    or any(not isinstance(x.get(key), str) or not x[key].strip()
+                           for key in ("item", "reason")) for x in conflicts)):
+                continue
+            return {"critique": critique, "version": d["version"],
+                    "changes": changes, "open_questions": questions,
+                    "owner_conflicts": conflicts,
+                    # Ledger junk remains non-fatal under the existing contract.
+                    "decisions": ledger_ops(d.get("decisions")), "parsed": True}
         except (ValueError, TypeError):
             continue
     return {"critique": "", "version": text.strip(), "changes": [], "open_questions": [],
@@ -1007,13 +1034,16 @@ def consume_notes(rally):
     committed = set(consumed)
     for item in pending_notes(inbox):
         identity = item.name[:-3]
+        if identity in committed:
+            archive_note(item, archive / item.name)
+            continue
         try:
             note = item.read_text(encoding="utf-8").strip()
         except OSError:
-            continue
+            break  # Never let a later note overtake an unreadable earlier one.
         if not note:
-            # A reserved name whose text is not written yet; leave it for a later hit.
-            continue
+            # Publication is still pending. Defer this note and everything after it.
+            break
         if identity not in committed:
             rally.state.setdefault("owner_notes", []).append(note)
             consumed.append(identity)
@@ -1068,11 +1098,23 @@ def append_note(directory, note):
     # Publish the text atomically. The engine reads the inbox while the owner
     # queues notes, so the claimed name must hold either nothing (it waits for a
     # later hit) or the whole note, never a half-written one.
-    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=inbox,
-                                     prefix="pending-", suffix=".tmp", delete=False) as f:
-        f.write(note)
-        pending = pathlib.Path(f.name)
-    publish(pending, inbox / note_name(seq))
+    pending = None
+    reserved = inbox / note_name(seq)
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=inbox,
+                                         prefix="pending-", suffix=".tmp", delete=False) as f:
+            pending = pathlib.Path(f.name)
+            f.write(note)
+        publish(pending, reserved)
+    except BaseException:
+        # A failed submission must not leave an empty reservation blocking the queue.
+        # If publish succeeded before interruption, leave the complete note intact.
+        if reserved.exists() and reserved.stat().st_size == 0:
+            reserved.unlink()
+        raise
+    finally:
+        if pending is not None:
+            pending.unlink(missing_ok=True)
     print(f"Note queued for the next hit in {out}.")
 
 

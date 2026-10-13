@@ -22,6 +22,11 @@ and let the owner contribute without losing completed work.
 - Two independent agent sessions may use the same CLI. No judge or early stopping.
 - Explore/deepen/converge phases scale roughly 30%/40%/30%; prompts include remaining hits.
 - Keep the JSON envelope. Unparsed replies must not become a version.
+- A version must be a nonblank string. Optional critique, changes, open questions and
+  conflicts must have their documented types when present; malformed envelopes use
+  the existing retry policy. Malformed ledger operations remain non-fatal.
+- Forward the previous hit's open questions and requirement conflicts to the next
+  model. Conflicts are proposals, never permission to change an owner requirement.
 - Use one per-phase size rewrite and flag any remaining overage.
 - Owner notes persist; interrupted rallies can resume.
 - Fatal context/token or setup errors stop immediately with a usable partial artifact.
@@ -50,6 +55,9 @@ filename and not a clock fixes submission order. A note's identity is committed 
 its text, so an interruption cannot deliver it twice; delivered files move to
 `inbox/consumed/`. A note's text is published into its claimed name atomically, so the
 engine never reads a half-written note. The host produces `deliverable.md` separately.
+An unpublished or unreadable earlier note blocks delivery of later notes, including
+after resume. Failed submissions remove their empty reservations; an empty reservation
+left by a hard-killed writer must be completed or removed before later notes can flow.
 
 Starting and resuming share one lifecycle: `execute()` runs the remaining turns under a
 single cancellation, error, and finalization policy, `conclude()` writes the terminal
@@ -74,6 +82,8 @@ Implemented and tested without credentials:
 - Unparsed output gets one retry with a JSON-only reminder after five seconds. If that
   fails, record a fault and let the opponent cover the hit. Two consecutive faults stop.
 - Fatal errors skip retry and stop; `final.md` includes the cause and completed work.
+- CLI exit and timeout classification excludes prompt-bearing command arguments;
+  words in the brief must not turn a transient failure into a fatal one.
 - Failed preflight leaves no half-created rally directory.
 - Notes submitted during a hit enter the following prompt and all later prompts,
   preserve submission order and multiline content, and are consumed once.

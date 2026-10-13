@@ -1,6 +1,6 @@
 # Handover: recovered baseline
 
-Updated 2026-10-07. Start here, then read `SPEC-v2.md` for scope and acceptance criteria.
+Updated 2026-10-13. Start here, then read `SPEC-v2.md` for scope and acceptance criteria.
 This replaces the stale handover that described already-committed work as uncommitted.
 
 ## Baseline and current owner decisions
@@ -21,6 +21,20 @@ motion is respected. Native host adapters remain deferred. See `ping-pong/DISPLA
 
 ## Implemented and verified locally
 
+- Review fixes (2026-10-13): each next-hit prompt now includes the prior hit's open
+  questions and requirement conflicts, explicitly treating conflicts as proposals,
+  not owner approval. Reply parsing requires a nonblank string version, string
+  critique, string lists for changes/questions and well-formed conflict objects;
+  omitted optional fields still default, and malformed ledger operations retain their
+  documented non-fatal handling. Invalid envelopes use the existing retry policy;
+  an invalid size rewrite cannot replace a valid first reply. CLI exit diagnostics no
+  longer include prompt-bearing argv, and timeouts are normalized before classification,
+  so brief wording cannot turn those transient failures into fatal errors.
+- Note consumption stops at the first uncommitted empty or unreadable reservation,
+  keeping later submissions behind it even across resume. Failed submissions clean up
+  their unpublished reservations and staged files. A hard-killed writer can still leave
+  an empty reservation: later notes wait until that file is completed or the abandoned
+  empty reservation is removed. No age-based skipping can silently reorder notes.
 - Atomic state writes followed by ordered append-only events; plain `status` and `wait`.
 - Drift metrics `lines_kept` and `size_ratio` on each hit (null on the serve).
 - Default 10 hits, phase-scaled prompts, and remaining-hit count.
@@ -38,8 +52,8 @@ motion is respected. Native host adapters remain deferred. See `ping-pong/DISPLA
   revision as its text and kept in `consumed_notes`, so an interruption between the
   commit and the file move cannot deliver it twice; delivered files move to
   `inbox/consumed/` instead of being deleted. Identity, not text, is deduplicated, so
-  two identical notes are both kept. A reserved but still empty file is left for a
-  later hit. Legacy `note-<timestamp>-<random>.md` files in older rallies are still
+  two identical notes are both kept. A reserved but still empty file and later notes
+  wait for a later hit. Legacy `note-<timestamp>-<random>.md` files in older rallies are still
   consumed once, ordered before current-format notes. Notes are retained in
   subsequent prompts and `final.md`; multiline notes are preserved.
 - Durable decision ledger (#5). State carries `ledger` entries
@@ -127,6 +141,12 @@ branch or merged main; do not resume implementation from that stale worktree.
 
 ## Remaining work and limits
 
+The follow-up review in `docs/project-review-2026-10-13.md` identifies two remaining
+reproduced gaps: a writer delayed between sequence selection and inbox reservation
+can reuse an identity already consumed by another writer, losing its note; and the
+CLI error formatter's stdout fallback can still mistake model output for a fatal
+transport diagnostic. The 10 review regression tests do not cover these cases yet.
+
 #5 (decision ledger) is implemented and tested in `tests/test_ledger.py`. #11 (owner
 notes) is now implemented: the owner's rewritten issue scopes it to exactly-once
 delivery and ordering, and explicitly rules out automatic note-to-ledger conversion and
@@ -183,7 +203,7 @@ players are gone (#21); do not reintroduce them, and do not add an adapter regis
 ## Validation and agent coordination
 
 Run `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v`.
-The suite is 123 credential-free tests: a real four-hit mock rally, event monitoring,
+The suite is 133 credential-free tests: a real four-hit mock rally, event monitoring,
 parser fixtures, process cleanup, animation preferences, budgets, note delivery and
 durability, resume, and locking; the decision ledger (seeding, cap rendering, disputes,
 final output, resume delivery); the lifecycle contracts in `tests/test_lifecycle.py`
@@ -192,7 +212,10 @@ policy); player selection in `tests/test_players.py` (detection, default and exp
 pairing, each retained CLI's argv, removed specs); the documented setup-then-start
 sequence in `tests/test_setup_flow.py`; and the one-outcome contract in
 `tests/test_deliverable.py` (brief carried to every hit, question grouping, partial
-rallies, and the host steps in `SKILL.md` and `OUTPUTS.md`).
+rallies, and the host steps in `SKILL.md` and `OUTPUTS.md`); and review regressions in
+`tests/test_review_regressions.py` (question/conflict handoff, ordered concurrent note
+publication and failure cleanup, prompt-independent exit/timeout handling including
+size rewrites, genuine authentication failures, and invalid reply rejection).
 
 Each agent needs its own branch and worktree. Give one agent ownership of `rally.py`.
 Do not apply the same stash into multiple active worktrees. Integrate one tested slice
