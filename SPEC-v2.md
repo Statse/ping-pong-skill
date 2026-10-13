@@ -116,9 +116,10 @@ Acceptance:
   Live players fill the allowance rather than treat it as a cap, so the ceiling - not a
   wider tolerance - is what prevents runaway growth. Behavior still retries an overage
   in any phase and still does not guarantee convergence; a `let` event was not added.
-- **Retry handling (#7): partial.** Unparsed faults, a JSON reminder, and one five-second
-  backoff are implemented. The issue also mentions a 20-second delay while allowing
-  only one retry; resolve this before changing retry count or closing the issue.
+- **Retry handling (#7): done.** Unparsed faults, a JSON reminder, and one five-second
+  backoff are implemented and tested. The issue's second 20-second delay was superseded
+  by the owner's 2026-10-11 reconciliation as conflicting with one retry; the issue is
+  closed. Do not reintroduce a second retry delay without a new owner request.
 - **Lifecycle unification (#23): implemented.** New and resumed runs share one
   execution and finalization path, a loaded rally has an explicit constructor, the
   per-hit request policy is one operation, and the unused duration average is gone.

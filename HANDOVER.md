@@ -132,14 +132,17 @@ notes) is now implemented: the owner's rewritten issue scopes it to exactly-once
 delivery and ordering, and explicitly rules out automatic note-to-ledger conversion and
 phase pauses, so `O-*` entries still come from `constraints.md` only. The ledger records
 and reports lost requirements; it still does not force a player to keep text in its
-version. #6 is now closed on live evidence (see below); #7 (retry handling) remains partial,
-so keep its remaining acceptance criteria explicit. The second retry delay mentioned
-in #7 requires resolving its conflict with one retry, and the live runs argue against
-a second size rewrite: one rewrite recovered about 10% on a large document, so a
-second would not close a 26% gap and would double the slowest hit in the set. The Windows note-ordering CI failure was reproduced locally
+version. #6 is now closed on live evidence (see below). #7 (retry handling) is closed too: the
+owner's 2026-10-11 reconciliation superseded its second 20-second delay as conflicting
+with one retry, and the implemented behavior - one retry after five seconds, then
+opponent coverage - already satisfies it. Do not reopen that delay. The live runs argue
+the same way for size rewrites: one rewrite recovered about 10% on a large document, so
+a second would not close a 26% gap and would double the slowest hit in the set. The Windows note-ordering CI failure was reproduced locally
 with a frozen clock and fixed, and the full matrix (Ubuntu, macOS, Windows on 3.9 and
 3.12) is now green on main. #12, #21, #22 and #23 are implemented and merged. #24, #6 and #31 are
-implemented on this branch; the open work is #7, and #8 stays deferred. Read
+implemented on this branch. With those merged, no issue carries unfinished
+implementation work: #7 is closed as superseded, #8 stays deferred on measured run
+times, and #1 is the umbrella that closes with them. Read
 `docs/evidence/live-validation-2026-10-13.md` before touching budgets or the ledger:
 it is the live evidence that gated them, and it records what the numbers do not show.
 
