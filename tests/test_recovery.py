@@ -4,6 +4,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -34,6 +35,18 @@ class RecoveryTests(unittest.TestCase):
             replacement.__enter__()
             self.addCleanup(replacement.__exit__, None, None, None)
 
+    def budget_filling_player(self):
+        """A player that fills its stated budget exactly, as the live players did.
+
+        Live hits landed within a few percent of the allowance, twice exactly on
+        it, so the budget behaves as a growth target. Modelling that is what makes
+        the ceiling observable.
+        """
+        def call(player, system, user):
+            limit = int(re.search(r'Maximum version length for this hit: (\d+)', system)[1])
+            return reply('x' * limit)
+        return call
+
     def play(self, total=4):
         return rally.play('An idea that preserves the owner requirements', total,
                           self.players, self.directory, rally.Progress())
@@ -50,6 +63,34 @@ class RecoveryTests(unittest.TestCase):
             self.assertIn(f'{10 - n} iterations remain', system)
             self.assertIn(f"Maximum version length for this hit: {hit['size_budget']}", system)
         self.assertEqual(game.state['hits'][-1]['size_budget'], 80)
+
+    def test_the_allowance_cannot_ratchet_past_the_growth_ceiling(self):
+        """A relative per-hit budget compounds; the served version caps it (#6)."""
+        ceiling = rally.GROWTH_CEILING
+        # Open phase, well below the ceiling: the phase multiplier still decides.
+        self.assertEqual(rally.size_budget('open', 100, 1000), 160)
+        # Open phase above the ceiling: the anchor decides instead of compounding.
+        self.assertEqual(rally.size_budget('open', 4 * ceiling, 4), 4 * ceiling)
+        # A draft already over the ceiling is held, never asked to shrink.
+        self.assertEqual(rally.size_budget('open', 900, 100), 900)
+        self.assertEqual(rally.size_budget('close', 900, 100), 900)
+        # No anchor yet - the serve has nothing to ratchet against.
+        self.assertEqual(rally.size_budget('deepen', 100), 130)
+
+    def test_ten_hits_of_budget_filling_players_stop_at_the_ceiling(self):
+        with patch.object(rally.Player, 'call', self.budget_filling_player()):
+            game = self.play(10)
+        hits = game.state['hits']
+        serve = len(hits[0]['version'])
+        ceiling = serve * rally.GROWTH_CEILING
+        self.assertLessEqual(max(len(hit['version']) for hit in hits), ceiling)
+        self.assertLessEqual(max(hit['size_budget'] for hit in hits), ceiling)
+        # Nothing was forced over the line, so no hit needed a rewrite or a flag.
+        self.assertFalse(any(hit['over_budget'] for hit in hits))
+        # The same phase multiplier, unanchored, would still be letting it grow.
+        self.assertGreater(rally.size_budget('deepen', ceiling), ceiling)
+        # Growth plateaus instead of ratcheting: the last hits sit at the ceiling.
+        self.assertEqual(len(hits[-1]['version']), ceiling)
 
     def test_size_repair_runs_once_and_records_remaining_overage(self):
         with patch.object(rally.Player, 'call', side_effect=[reply('x' * 180), reply('y' * 150)]) as call:

@@ -249,10 +249,26 @@ def remaining_iterations(n, total):
     return max(0, total - n)
 
 
-def size_budget(phase, incoming_size):
-    """Maximum version size for a phase, measured against the incoming draft."""
+# Live rallies never needed more than 4.5x the served version, over ten hits from
+# a one-sentence brief; four-hit rallies needed 1.4x to 2.9x. See
+# `docs/evidence/live-validation-2026-10-13.md`.
+GROWTH_CEILING = 5
+
+
+def size_budget(phase, incoming_size, anchor=None):
+    """Maximum version size for a phase, measured against the incoming draft.
+
+    The phase multiplier is relative, so on its own the allowance ratchets with
+    the hit count: 11.7x the served version over ten compliant hits, and about
+    137x over twenty. `anchor` is the served version's size, and it caps that
+    ratchet at `GROWTH_CEILING` without compounding. A draft that already sits at
+    the ceiling can still be rewritten; it is never asked to shrink.
+    """
     multiplier = {"open": 1.6, "deepen": 1.3, "close": 1.0}[phase]
-    return max(1, int(incoming_size * multiplier))
+    budget = max(1, int(incoming_size * multiplier))
+    if anchor:
+        budget = min(budget, max(incoming_size, int(anchor * GROWTH_CEILING)))
+    return budget
 
 
 def seed_owner_ledger(out):
@@ -816,7 +832,9 @@ def play_turns(rally, idea, total, players, ticker):
         notes = consume_notes(rally)
         phase = phase_for(n, total)
         incoming_size = len(prev["version"]) if prev else max(120, len(idea))
-        budget = size_budget(phase, incoming_size)
+        # The serve anchors the ceiling; before it exists there is nothing to ratchet.
+        anchor = len(hits[0]["version"]) if hits else None
+        budget = size_budget(phase, incoming_size, anchor)
         system = SYSTEM.format(me=me.label, them=them.label, n=n, total=total,
                                remaining=remaining_iterations(n, total),
                                phase=PHASES[phase], budget=budget)
