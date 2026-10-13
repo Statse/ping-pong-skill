@@ -9,7 +9,11 @@ after the runs; nothing in the selection was chosen after seeing an outcome.
 - Players: `cli:claude` (Claude Code 2.1.291) serving, `cli:codex` (codex-cli 0.160.0)
   returning. This is the engine's default pair; no model alias is chosen by the engine,
   so the effective model is each CLI's own default for this account.
-- Rally directories under `/tmp/pp-live/.ping-pong/`, outside the repo.
+- Rally directories under `/tmp/pp-live/.ping-pong/`, outside the repo. Each run's
+  raw artifacts are archived in `live-2026-10-13/`: `<run>-state.json` (every hit,
+  critique, ledger entry and budget), the engine's `<run>-final.md`, the host-written
+  `<run>-deliverable.md`, and R3's seeded `r3-constraints.md`. Every number below is
+  recomputable from those files.
 
 ## Selected runs
 

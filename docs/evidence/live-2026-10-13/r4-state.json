@@ -1,0 +1,252 @@
+{
+ "idea": "# Idea to refine: a weekly \"ops review\" ritual for a five-person startup\n\nA standing 30-minute weekly meeting where the team looks at what broke, what is\nabout to break, and what one thing they will fix this week. Right now it drifts\ninto a status round and nothing gets decided.\n\nRequested output: kirjoita lopputulos suomeksi. Haluan yhden sivun\ntarkistuslistan tiimin vetäjälle, enintään 400 sanaa, pelkkinä ranskalaisina\nviivoina - ei esseetä, ei taulukoita, ei koodia. Jokainen kohta kertoo mitä\nvetäjä tekee ja milloin.",
+ "iterations": 4,
+ "players": [
+  {
+   "spec": "cli:claude",
+   "label": "Claude Code"
+  },
+  {
+   "spec": "cli:codex",
+   "label": "Codex"
+  }
+ ],
+ "hits": [
+  {
+   "n": 1,
+   "side": 0,
+   "player": "Claude Code",
+   "seconds": 20.7,
+   "critique": "Tämä on ensimmäinen versio, joten vastattavaa versiota ei vielä ole. Briefin ydinongelma on, että palaveri muuttuu statuskierrokseksi eikä mitään päätetä. Siksi aikataulu ei yksin riitä. Tarvitaan valmisteltu syöte ennen palaveria, aikalaatikoidut osiot, keskeytyssääntö ja pakotettu päätös, jolla on omistaja. Lisäksi tarvitaan seuraavan viikon tarkistus, jotta päätöksellä on seurauksia. Muoto noudattaa omistajan pyyntöä: suomeksi, vain ranskalaisia viivoja, ja jokaisessa kohdassa vetäjän teko ja ajankohta.",
+   "version": "- **Päivää ennen:** kokoa viikon katkot, hälytykset ja asiakasvalitukset yhteen listaan. Älä pyydä keneltäkään raporttia.\n- **Päivää ennen:** valitse listalta 3–5 käsiteltävää asiaa ja jaa ne tiimille.\n- **0–3 min:** tarkista viime viikon korjaus: valmis vai ei? Jos ei, kysy mikä esti.\n- **3–10 min:** käy läpi mikä hajosi: faktat ja vaikutus, ei syyllisiä.\n- **10–18 min:** kysy jokaiselta yksi asia, joka on hajoamassa. Katkaise statuspuhe heti: ”Mikä tässä voi hajota?”\n- **18–27 min:** päätä yksi korjaus tälle viikolle: omistaja, valmiin määritelmä ja takaraja.\n- **27–30 min:** lue päätös ääneen ja siirrä muut asiat jonoon.\n- **Heti jälkeen:** kirjaa päätös tiimin kanavalle.\n- **Puolivälissä viikkoa:** kysy omistajalta, onko korjaus raiteillaan.",
+   "changes": [
+    "Lisäsin valmistelun ennen palaveria, jotta palaverin aika ei kulu tiedon keräämiseen",
+    "Aloitin edellisen viikon korjauksen tarkistuksella, jotta päätöksillä on seurauksia",
+    "Lisäsin aikalaatikot ja repliikin, jolla vetäjä katkaisee statuspuheen",
+    "Vaadin päätökseen omistajan, valmiin määritelmän ja takarajan",
+    "Lisäsin kirjauksen palaverin jälkeen ja tarkistuksen puolivälissä viikkoa"
+   ],
+   "open_questions": [
+    "Mistä katkotiedot tulevat (valvonta, tukipyynnöt, Slack)? Tämä ratkaisee, miten vetäjä kokoaa listan.",
+    "Saako viikon korjaus ohittaa muun työn, vai pitääkö se mahduttaa muun työn lomaan?",
+    "Kiertääkö vetäjän rooli vai onko vetäjä aina sama henkilö?"
+   ],
+   "owner_conflicts": [],
+   "decisions": [
+    {
+     "op": "add",
+     "id": "",
+     "text": "Palaveri alkaa aina edellisen viikon korjauksen tarkistuksella",
+     "reason": ""
+    },
+    {
+     "op": "add",
+     "id": "",
+     "text": "Palaverista syntyy täsmälleen yksi päätös, jolla on omistaja, valmiin määritelmä ja takaraja",
+     "reason": ""
+    },
+    {
+     "op": "add",
+     "id": "",
+     "text": "Vetäjä valmistelee käsiteltävät asiat päivää ennen; palaverissa ei kerätä statuksia",
+     "reason": ""
+    }
+   ],
+   "parsed": true,
+   "phase": "open",
+   "size_budget": 840,
+   "over_budget": false,
+   "lines_kept": null,
+   "size_ratio": null
+  },
+  {
+   "n": 2,
+   "side": 1,
+   "player": "Codex",
+   "seconds": 63.9,
+   "critique": "Aikataulu ja päätöspakko ovat vahvoja. Valintaperuste, keskeneräisen korjauksen kohtalo ja valmistumisen näyttö puuttuvat. Riskikierros voi yhä lipsua statuksiin; akuutti häiriö ei saa odottaa palaveria.",
+   "version": "- Päivää ennen: kokoa katkot, hälytykset, asiakasvalitukset ja riskihavainnot; jaa 3–5 tärkeintä vaikutuksineen, älä kerää statuksia.\n- 0–3 min: tarkista viime korjaus sovitulla näytöllä; jos kesken, selvitä este ja ota jatkaminen mukaan valintaan.\n- 3–10 min: käy läpi mitä hajosi ja kenelle koitui haittaa; estä syyllistäminen.\n- 10–18 min: pyydä jokaiselta yksi riski ja sen merkki; katkaise statuspuhe: ”Mikä voi hajota?”\n- 18–27 min: päätä vaikutuksen ja kiireellisyyden perusteella täsmälleen yksi viikon korjaus, tarvittaessa edellisen jatko. Sovi omistaja, todennettava valmis-tulos ja takaraja.\n- 27–30 min: lue päätös ääneen, varmista omistajan työaika ja jonota muut asiat.\n- Heti jälkeen: kirjaa päätös tiimin kanavalle.\n- Keskellä viikkoa: kysy omistajalta esteet ja auta poistamaan ne.\n- Heti akuutin häiriön ilmetessä: käynnistä hoito odottamatta palaveria.",
+   "changes": [
+    "Lisäsin valintaperusteet ja valmistumisen näytön.",
+    "Säilytin keskeneräisen korjauksen vaihtoehtona.",
+    "Täsmensin riskikierrosta ja varmistin työajan.",
+    "Erotin akuutin häiriön hoidon viikkorytmistä."
+   ],
+   "open_questions": [],
+   "owner_conflicts": [],
+   "decisions": [
+    {
+     "op": "add",
+     "id": "",
+     "text": "P-4: Korjaus valitaan vaikutuksen ja kiireellisyyden perusteella; keskeneräisen jatko on vaihtoehto.",
+     "reason": ""
+    },
+    {
+     "op": "add",
+     "id": "",
+     "text": "P-5: Valmistuminen todennetaan sovitulla näytöllä ja omistajan työaika varmistetaan.",
+     "reason": ""
+    },
+    {
+     "op": "add",
+     "id": "",
+     "text": "P-6: Akuutin häiriön hoito käynnistetään heti, viikkopalaveria odottamatta.",
+     "reason": ""
+    }
+   ],
+   "parsed": true,
+   "phase": "deepen",
+   "size_budget": 981,
+   "over_budget": false,
+   "lines_kept": 0.0,
+   "size_ratio": 1.15
+  },
+  {
+   "n": 3,
+   "side": 0,
+   "player": "Claude Code",
+   "seconds": 24.3,
+   "critique": "Aikataulu, valintaperuste, todentaminen ja akuutin häiriön erottaminen ovat nyt kunnossa. Muutamat poikkeustilanteet on yhä ratkaisematta. Jos tiimi ei pääse yksimielisyyteen, päätös voi jäädä syntymättä, eikä lista kerro, kuka silloin päättää. Riskikierrokselta puuttuu aikaraja per henkilö, joten yksi puhuja voi viedä kaikki kahdeksan minuuttia. Lista ei kerro, mitä tehdään hiljaisena viikkona, kun mikään ei hajonnut. Ei myöskään ole sovittu, mitä tapahtuu, jos omistaja sairastuu kesken viikon. 'Keskellä viikkoa' on epämääräinen, joten nimesin tarkistukselle päivän. Lisäksi palaverin aloitusta ja lopetusta ei ole sidottu kelloon, ja tämä on yleisin syy siihen, että palaveri venyy statuskierrokseksi.",
+   "version": "- Päivää ennen: kokoa katkot, hälytykset, asiakasvalitukset ja riskit; jaa tiimille 3–5 tärkeintä vaikutuksineen. Älä pyydä statuksia.\n- Alussa: aloita minuutilleen, vaikka joku puuttuisi.\n- 0–3 min: tarkista edellinen korjaus sovitulla näytöllä; jos se on kesken, selvitä este ja ota jatko mukaan valintaan.\n- 3–10 min: käy läpi, mikä hajosi ja kenelle siitä koitui haittaa; katkaise syyllistäminen.\n- 10–18 min: kysy jokaiselta yksi riski ja sen ennusmerkki, enintään 90 s/hlö; katkaise statuspuhe: ”Mikä voi hajota?”\n- 18–27 min: valitse vaikutuksen ja kiireen perusteella täsmälleen yksi korjaus tai edellisen jatko. Jos yksimielisyyttä ei synny, päätä itse. Sovi omistaja, näyttö ja takaraja.\n- Hiljaisella viikolla: valitse tärkein riski ennaltaehkäiseväksi korjaukseksi.\n- 27–30 min: lue päätös ääneen, varmista omistajan työaika, nimeä varahenkilö ja siirrä muut asiat jonoon. Lopeta ajallaan.\n- Heti jälkeen: kirjaa päätös tiimin kanavalle.\n- Keskiviikkona: kysy omistajalta esteet ja poista ne; jos omistaja on estynyt, siirrä työ varahenkilölle.\n- Akuutin häiriön ilmetessä: käynnistä hoito heti, älä odota palaveria.",
+   "changes": [
+    "Vetäjä ratkaisee valinnan, jos yksimielisyyttä ei synny",
+    "Riskikierrokselle aikaraja 90 s/hlö",
+    "Hiljaiselle viikolle ennaltaehkäisevä korjaus",
+    "Varahenkilö omistajan estymisen varalle",
+    "Väliviikon tarkistus sidottu keskiviikkoon",
+    "Palaveri alkaa ja loppuu kellon mukaan"
+   ],
+   "open_questions": [
+    "Mikä on tiimin kanava päätösten kirjaamiseen, ja mistä katkot ja hälytykset kootaan?",
+    "Onko vetäjä aina sama henkilö vai vuorotteleeko rooli?",
+    "Kenelle akuutin häiriön hoidon käynnistäminen kuuluu, jos vetäjä ei ole tavoitettavissa?"
+   ],
+   "owner_conflicts": [],
+   "decisions": [
+    {
+     "op": "add",
+     "id": "",
+     "text": "P-7: Jos tiimi ei pääse yksimielisyyteen, vetäjä tekee valinnan; palaveri ei pääty ilman päätöstä.",
+     "reason": ""
+    },
+    {
+     "op": "add",
+     "id": "",
+     "text": "P-8: Korjaukselle nimetään varahenkilö, ja hiljaisena viikkona valitaan ennaltaehkäisevä korjaus riskeistä.",
+     "reason": ""
+    }
+   ],
+   "parsed": true,
+   "phase": "deepen",
+   "size_budget": 1133,
+   "over_budget": false,
+   "lines_kept": 0.111,
+   "size_ratio": 1.29
+  },
+  {
+   "n": 4,
+   "side": 1,
+   "player": "Codex",
+   "seconds": 29.3,
+   "critique": "Runko on toimiva. Riskikierros voi silti muuttua uusien asioiden keruuksi, vaikka valmistelu on sovittu tehtäväksi etukäteen. Valmiin määritelmä jää näytön varaan, ja keskiviikon tarkistus voi osua ennen palaveria. Täsmennän nämä ja yhdistän hiljaisen viikon valinnan samaan päätöskohtaan.",
+   "version": "- Päivää ennen: kokoa viiden hengen tiimiltä häiriöt ja riskit ennusmerkkeineen; jaa 3–5 tärkeintä vaikutuksineen. Älä kerää statuksia.\n- 0–3 min: aloita ajallaan edellisen korjauksen tarkistuksella; todenna valmistuminen sovitulla näytöllä. Jos työ on kesken, selvitä este ja ota jatko valintaan.\n- 3–10 min: käy läpi, mikä hajosi ja ketä se haittasi; katkaise syyllistäminen.\n- 10–18 min: käy valmistellut riskit läpi, enintään 90 s/hlö; palauta statuspuhe kysymykseen ”Mikä voi hajota?”\n- 18–27 min: valitse vaikutuksen ja kiireen perusteella täsmälleen yksi korjaus tai edellisen jatko; hiljaisella viikolla ehkäise tärkein riski. Ellei yksimielisyyttä synny, päätä itse. Sovi omistaja, valmiin määritelmä, näyttö ja takaraja.\n- 27–30 min: lue päätös ääneen, varmista omistajan työaika, nimeä varahenkilö ja siirrä muut asiat jonoon. Lopeta ajallaan.\n- Heti jälkeen: kirjaa päätös tiimin kanavalle.\n- Viikon puolivälissä: kysy omistajalta esteet ja auta poistamaan ne; omistajan estyessä siirrä työ varahenkilölle.\n- Akuutin häiriön ilmetessä: käynnistä hoito heti.",
+   "changes": [
+    "Sidoin riskikierroksen ennakkovalmisteluun.",
+    "Kirjasin valmiin määritelmän erikseen näytöstä.",
+    "Vaihdoin keskiviikon viikon puoliväliin.",
+    "Yhdistin hiljaisen viikon toiminnan valintakohtaan."
+   ],
+   "open_questions": [],
+   "owner_conflicts": [],
+   "decisions": [
+    {
+     "op": "add",
+     "id": "",
+     "text": "P-9: Riskikierros käsittelee ennakkoon valmistellut riskit; esteet tarkistetaan palaverin ja takarajan välisen työjakson puolivälissä.",
+     "reason": ""
+    }
+   ],
+   "parsed": true,
+   "phase": "close",
+   "size_budget": 1128,
+   "over_budget": false,
+   "lines_kept": 0.182,
+   "size_ratio": 0.95
+  }
+ ],
+ "faults": [],
+ "owner_notes": [],
+ "consumed_notes": [],
+ "next_side": 0,
+ "ledger": [
+  {
+   "id": "P-1",
+   "by": "Claude Code",
+   "text": "Palaveri alkaa aina edellisen viikon korjauksen tarkistuksella",
+   "status": "standing",
+   "reason": null
+  },
+  {
+   "id": "P-2",
+   "by": "Claude Code",
+   "text": "Palaverista syntyy täsmälleen yksi päätös, jolla on omistaja, valmiin määritelmä ja takaraja",
+   "status": "standing",
+   "reason": null
+  },
+  {
+   "id": "P-3",
+   "by": "Claude Code",
+   "text": "Vetäjä valmistelee käsiteltävät asiat päivää ennen; palaverissa ei kerätä statuksia",
+   "status": "standing",
+   "reason": null
+  },
+  {
+   "id": "P-4",
+   "by": "Codex",
+   "text": "P-4: Korjaus valitaan vaikutuksen ja kiireellisyyden perusteella; keskeneräisen jatko on vaihtoehto.",
+   "status": "standing",
+   "reason": null
+  },
+  {
+   "id": "P-5",
+   "by": "Codex",
+   "text": "P-5: Valmistuminen todennetaan sovitulla näytöllä ja omistajan työaika varmistetaan.",
+   "status": "standing",
+   "reason": null
+  },
+  {
+   "id": "P-6",
+   "by": "Codex",
+   "text": "P-6: Akuutin häiriön hoito käynnistetään heti, viikkopalaveria odottamatta.",
+   "status": "standing",
+   "reason": null
+  },
+  {
+   "id": "P-7",
+   "by": "Claude Code",
+   "text": "P-7: Jos tiimi ei pääse yksimielisyyteen, vetäjä tekee valinnan; palaveri ei pääty ilman päätöstä.",
+   "status": "standing",
+   "reason": null
+  },
+  {
+   "id": "P-8",
+   "by": "Claude Code",
+   "text": "P-8: Korjaukselle nimetään varahenkilö, ja hiljaisena viikkona valitaan ennaltaehkäisevä korjaus riskeistä.",
+   "status": "standing",
+   "reason": null
+  },
+  {
+   "id": "P-9",
+   "by": "Codex",
+   "text": "P-9: Riskikierros käsittelee ennakkoon valmistellut riskit; esteet tarkistetaan palaverin ja takarajan välisen työjakson puolivälissä.",
+   "status": "standing",
+   "reason": null
+  }
+ ],
+ "disputes": [],
+ "current": null,
+ "status": "done",
+ "started_at": 1791897351929,
+ "finished_at": 1791897490185,
+ "event_id": 10
+}
