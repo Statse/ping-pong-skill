@@ -1,0 +1,3 @@
+- It must work with no account, no login and no sign-up of any kind.
+- It must stay a single HTML file with no build step and no package install.
+- It must never send the list to a server; the data stays on the two devices.

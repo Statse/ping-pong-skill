@@ -9,6 +9,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from unittest.mock import patch
@@ -147,6 +148,70 @@ class RallyTests(unittest.TestCase):
         self.assertEqual([s['event_id'] for s in observations], list(range(1, 7)))
         self.assertEqual([len(s['hits']) for s in observations], [0, 1, 2, 3, 4, 4])
         self.assertEqual(observations[-1]['status'], 'done')
+
+    def test_state_publishes_while_a_reader_holds_the_file_open(self):
+        """Windows refuses a rename over an open handle; the publish waits it out."""
+        game = self.new_rally()
+        game.state['status'] = 'running'
+        holding = threading.Event()
+
+        def reader():
+            with (self.directory / 'state.json').open('rb') as f:
+                holding.set()
+                f.read()
+                time.sleep(0.2)
+
+        thread = threading.Thread(target=reader)
+        thread.start()
+        self.addCleanup(thread.join)
+        self.assertTrue(holding.wait(5))
+        game.save('hit', summary='Hit 1')
+        stored = json.loads((self.directory / 'state.json').read_text(encoding='utf-8'))
+        self.assertEqual(stored['event_id'], 2)
+        self.assertFalse((self.directory / 'state.json.tmp').exists())
+
+    def test_a_contended_publish_retries_and_keeps_event_order(self):
+        """The same staged revision lands whole; its event follows, never precedes."""
+        game = self.new_rally()
+        game.state['status'] = 'running'
+        original, denials = rally.os.replace, []
+
+        def contended(source, destination):
+            if Path(destination).name == 'state.json' and len(denials) < 2:
+                denials.append(json.loads(Path(source).read_text(encoding='utf-8')))
+                raise PermissionError(5, 'Access is denied')
+            return original(source, destination)
+
+        with patch.object(rally.os, 'replace', contended), patch.object(rally.time, 'sleep'):
+            game.save('hit', summary='Hit 1')
+        # Every attempt published the one staged revision, never a partial one.
+        self.assertEqual([revision['event_id'] for revision in denials], [2, 2])
+        stored = json.loads((self.directory / 'state.json').read_text(encoding='utf-8'))
+        self.assertEqual(stored['event_id'], 2)
+        events = [json.loads(line) for line in
+                  (self.directory / 'events.jsonl').read_text(encoding='utf-8').splitlines()]
+        self.assertEqual([event['type'] for event in events], ['serve', 'hit'])
+
+    def test_a_publish_that_never_lands_is_a_bounded_engine_error(self):
+        game = self.new_rally()
+        game.state['status'] = 'running'
+        original = rally.os.replace
+
+        def denied(source, destination):
+            if Path(destination).name == 'state.json':
+                raise PermissionError(5, 'Access is denied')
+            return original(source, destination)
+
+        with patch.object(rally.os, 'replace', denied), \
+                patch.object(rally.time, 'sleep') as slept:
+            with self.assertRaises(OSError) as caught:
+                game.save('hit', summary='Hit 1')
+        self.assertIn('Could not publish', str(caught.exception))
+        self.assertIn('Access is denied', str(caught.exception))
+        # Bounded: one delay between attempts, then the error, never a forever loop.
+        self.assertEqual(slept.call_count, rally.PUBLISH_ATTEMPTS - 1)
+        # An unpublished revision leaves no event claiming it happened.
+        self.assertEqual((self.directory / 'events.jsonl').read_text(encoding='utf-8').count('\n'), 1)
 
     def test_timeout_prints_status(self):
         game = self.new_rally()

@@ -249,10 +249,26 @@ def remaining_iterations(n, total):
     return max(0, total - n)
 
 
-def size_budget(phase, incoming_size):
-    """Maximum version size for a phase, measured against the incoming draft."""
+# Live rallies never needed more than 4.5x the served version, over ten hits from
+# a one-sentence brief; four-hit rallies needed 1.4x to 2.9x. See
+# `docs/evidence/live-validation-2026-10-13.md`.
+GROWTH_CEILING = 5
+
+
+def size_budget(phase, incoming_size, anchor=None):
+    """Maximum version size for a phase, measured against the incoming draft.
+
+    The phase multiplier is relative, so on its own the allowance ratchets with
+    the hit count: 11.7x the served version over ten compliant hits, and about
+    137x over twenty. `anchor` is the served version's size, and it caps that
+    ratchet at `GROWTH_CEILING` without compounding. A draft that already sits at
+    the ceiling can still be rewritten; it is never asked to shrink.
+    """
     multiplier = {"open": 1.6, "deepen": 1.3, "close": 1.0}[phase]
-    return max(1, int(incoming_size * multiplier))
+    budget = max(1, int(incoming_size * multiplier))
+    if anchor:
+        budget = min(budget, max(incoming_size, int(anchor * GROWTH_CEILING)))
+    return budget
 
 
 def seed_owner_ledger(out):
@@ -499,7 +515,7 @@ class Rally:
             self.state["event_id"] += 1
         tmp = self.out / "state.json.tmp"
         tmp.write_text(json.dumps(self.state, ensure_ascii=False, indent=1), encoding="utf-8")
-        os.replace(tmp, self.out / "state.json")
+        publish(tmp, self.out / "state.json")
         if event:
             # Publish state first. A reader may see newer state, never older state.
             entry = {"id": self.state["event_id"], "type": event, "at": _now_ms(), **details}
@@ -512,7 +528,30 @@ def set_active(out):
     with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=ACTIVE.parent,
                                      prefix="active-", delete=False) as f:
         json.dump({"state": str(out / "state.json")}, f)
-    os.replace(f.name, ACTIVE)
+    publish(f.name, ACTIVE)
+
+
+# Windows refuses to rename over a destination another process holds open, so an
+# owner running `status`, `wait`, or `note` against a live rally could kill it
+# with "[WinError 5] Access is denied". Every reader here opens the file for one
+# short read, so a bounded retry outlasts the contention; POSIX never retries.
+PUBLISH_ATTEMPTS = 20
+PUBLISH_DELAY_S = 0.05
+
+
+def publish(staged, destination):
+    """Move a staged file over its destination. All-or-nothing for any reader."""
+    for remaining in range(PUBLISH_ATTEMPTS - 1, -1, -1):
+        try:
+            os.replace(staged, destination)
+            return
+        except PermissionError as exc:
+            if not remaining:
+                raise OSError(
+                    f"Could not publish {destination} after {PUBLISH_ATTEMPTS} attempts "
+                    f"over {PUBLISH_ATTEMPTS * PUBLISH_DELAY_S:.1f}s; another process may "
+                    f"be holding it open: {exc}") from exc
+            time.sleep(PUBLISH_DELAY_S)
 
 
 def _now_ms():
@@ -793,7 +832,9 @@ def play_turns(rally, idea, total, players, ticker):
         notes = consume_notes(rally)
         phase = phase_for(n, total)
         incoming_size = len(prev["version"]) if prev else max(120, len(idea))
-        budget = size_budget(phase, incoming_size)
+        # The serve anchors the ceiling; before it exists there is nothing to ratchet.
+        anchor = len(hits[0]["version"]) if hits else None
+        budget = size_budget(phase, incoming_size, anchor)
         system = SYSTEM.format(me=me.label, them=them.label, n=n, total=total,
                                remaining=remaining_iterations(n, total),
                                phase=PHASES[phase], budget=budget)
@@ -1031,7 +1072,7 @@ def append_note(directory, note):
                                      prefix="pending-", suffix=".tmp", delete=False) as f:
         f.write(note)
         pending = pathlib.Path(f.name)
-    os.replace(pending, inbox / note_name(seq))
+    publish(pending, inbox / note_name(seq))
     print(f"Note queued for the next hit in {out}.")
 
 

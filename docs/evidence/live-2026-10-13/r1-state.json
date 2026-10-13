@@ -1,0 +1,474 @@
+{
+ "idea": "# Idea to refine: the \"ping-pong\" agent skill\n\n## What it is\n`ping-pong` is an Agent Skill (a folder with SKILL.md + scripts) for coding agents: Claude Code, Codex CLI, Cursor CLI and OpenCode, plus their GUI versions. The user gives an **idea** and a number of **iterations**. The skill bounces the idea between two different LLMs. Each **hit** means one model gets the current version and its opponent's notes, critiques them, and returns an improved version. Early hits open the idea up, middle hits make it concrete, and late hits converge. The agent running the skill acts as umpire: it starts the rally, shows its progress, and turns the final version into a deliverable:\n- **Non-code idea** → whatever form is most usable (plan, pitch, brief…).\n- **Code that one agent session can build** → a one-shot build prompt.\n- **Larger code** → a ticket-ready spec in vertical slices, so `/to-tickets` or `/to-issues` can split it.\n\n## How it works now\n- `scripts/rally.py` (Python stdlib only) runs the rally.\n  - Players are specs like `cli:claude`, `cli:codex`, `cli:cursor`, `cli:opencode`, `cli:copilot`, `cli:gemini`, `anthropic:<model>`, `openai:<model>`, `gemini:<model>`, `openrouter:<model>`, or `mock:<name>`.\n  - It auto-detects available CLIs and API keys and prefers two different vendors.\n  - Each player must reply with JSON: `critique`, `version`, `changes`, `open_questions`.\n  - CLIs run in a temp dir, away from the user's repo.\n  - On a failure the player gets one retry, then the opponent takes the hit. Two faults in a row stop the rally.\n  - Outputs go to `.ping-pong/<timestamp>-<slug>/`: `state.json` (updated after every hit), `final.md`, and `replay.html`. A pointer is written to `~/.ping-pong/active.json`.\n- **Display**, in three layers:\n  1. **Live court**: `court.html` is served on localhost and opened in the browser. It shows a side-view table tennis table with two paddles; the ball flies toward whichever model is thinking. It also has a scoreboard, a progress dot per hit, a rally log, the final version with a copy button, and an offline replay.\n  2. **Chat frames**: `pet.py --frame` prints a small ASCII court. The agent pastes it about once a minute while polling. This works in every UI.\n  3. **Pet in the agent's own UI** (inspired by the Copilot desk pet), installed with `setup_pet.py`:\n     - Claude Code: a statusline line with an animated ball (`refreshInterval: 1`).\n     - Cursor CLI: a statusline line; it replaces the native footer while installed.\n     - OpenCode: a plugin that shows toasts.\n     - Codex, Copilot CLI and all GUI versions: no hook available, so no pet.\n     The installer wraps any existing statusline, backs up config, and supports `--uninstall`.\n- `SKILL.md` gives the agent 7 steps: take args → pick players → start the rally in the background → show the rally (offer the pet once) → check the rally → shape the deliverable (`OUTPUTS.md` templates) → report.\n\n## Known weak spots / open questions\n- I haven't tested it against real CLIs. Headless flags change often (`agent -p --mode ask`, `opencode run`, `copilot -s -p`, `codex exec --output-last-message`), and the default API model names may be stale.\n- The rally is purely sequential with no judge. Is alternating critique+rewrite the best protocol? Alternatives: a third \"umpire\" model scoring each hit, early stopping when versions converge, or keeping the best version rather than the last.\n- Context grows only with the latest version plus notes, so earlier good ideas can be silently dropped across many hits.\n- Several cursor-agent/opencode/copilot players may run the same underlying vendor, so \"different LLMs\" isn't guaranteed.\n- The pet is uneven across hosts: Cursor replaces its own footer, and OpenCode toasts can be spammy or easy to miss.\n- The deliverable classification (one-shot vs tickets) is a judgment made by the umpire agent. Should the players vote, or should there be measurable criteria?\n- There's no cost or time budget, no cancel or resume, and no way for the user to interject mid-rally (e.g. answer open questions between hits).\n- Windows support is untested (shlex quoting in statusline commands, `python3` vs `python`).\n\n## What I want from the refinement\nMake the skill more reliable, more useful and more fun, while keeping it simple: stdlib Python, no installs, and SKILL.md under ~100 lines. Keep the ping-pong visual as the signature element. The end product should be a ticket-ready spec for the next version of the skill.",
+ "iterations": 4,
+ "players": [
+  {
+   "spec": "cli:claude",
+   "label": "Claude Code"
+  },
+  {
+   "spec": "cli:codex",
+   "label": "Codex"
+  }
+ ],
+ "hits": [
+  {
+   "n": 1,
+   "side": 0,
+   "player": "Claude Code",
+   "seconds": 50.7,
+   "critique": "This is the first serve, so there is no previous version to critique. Notes on the owner's brief: (1) The brief's biggest weak spot is that ideas can be lost over many hits, and a protocol can fix that. The fix is a decision ledger carried with every hit, the same mechanism this rally uses, plus a check that rejects any hit that silently drops an owner requirement. (2) 'Untested against real CLIs' is a reliability problem that a smoke test (`doctor`) solves better than guessing flags; adapters should be data, not code. (3) A third judge model adds cost and moving parts. A cheaper way to keep the best version is for each player to score the version it receives, combined with convergence-based early stopping. (4) Cancel, resume and interjection can share one simple mechanism: a file-based control channel. (5) The pet is spread across too many hosts. Tier it, and make the court the main experience. (6) Deliverable classification needs measurable signals rather than umpire vibes.",
+   "version": "# ping-pong v2: ticket-ready spec\n\n## Goal\nTwo different LLMs rally an idea (critique + rewrite per hit). The host agent acts as umpire and ships a deliverable: a usable doc for non-code ideas, a one-shot build prompt, or a sliced ticket spec. v2 makes it **reliable** (real CLIs verified, nothing silently lost), **steerable** (budget, stop, resume, interject) and **more fun** (the court tells a story). Constraints: stdlib Python only, no installs, SKILL.md ≤100 lines, and the ping-pong court stays the signature.\n\n## Core concepts\n- **Hit**: one player receives {brief, current version, opponent notes, ledger, phase} and returns JSON `critique, version, changes, open_questions, owner_conflicts, decisions, score_in` (1–10 for the version it received).\n- **Phase** by hit position: open up (first ~third), make concrete, converge (last hit polishes only and adds no new scope).\n- **Decision ledger**: `O-*` owner non-negotiables (from the brief or interjections) and `P-*` player commitments. Dropping a P-* entry requires a reason. O-* entries can't be dropped, only flagged in `owner_conflicts`. This is the fix for silently lost ideas.\n- **Umpire** = the host agent. No third model by default.\n\n## Vertical slices\n\n### S1. Ledger protocol\nAdd ledger, phase and the new JSON fields to the prompt and to `state.json`. The rally applies `decisions` ops, and each version must stay under a length cap.\n**AC:** a 6-hit mock rally keeps every O-* entry. A hit whose ops drop an O-* entry, or drop a P-* entry without a reason, is rejected as a fault (it gets a retry). The ledger is shown in `final.md`.\n\n### S2. `rally.py doctor` + adapter table\nCLI invocations move to `adapters.json` (command, headless flags, output mode, timeout, vendor hint). `doctor` sends each detected player a tiny JSON echo prompt. It caches pass/fail plus `--version` in `~/.ping-pong/doctor.json`, and falls back to alternate flag sets listed in the adapter entry.\n**AC:** `doctor` prints a table of player, version, OK/FAIL and latency. Players that failed are skipped by auto-pick. Stale API model names can be overridden with `PING_PONG_MODEL_<VENDOR>`. Updating flags means editing JSON, not code.\n\n### S3. Real-vendor guarantee\nEach player resolves to a vendor (from the adapter hint, from model flags, or by asking the model in doctor). Auto-pick needs two different vendors. A same-vendor pair needs `--allow-same-vendor` and shows a ⚠ on the court.\n**AC:** with `cursor` + `claude` both on Anthropic, a warning is shown and another pair is suggested.\n\n### S4. Best version, early stop, budget\nTrack `score_in`. `final.md` uses the highest-scored version unless the last version scores within 1 point of it, in which case the last version wins. The rally stops early when two consecutive versions have a difflib ratio >0.95 and no new decisions. Options: `--max-minutes`, `--per-hit-timeout` (default 300s), and a rough token estimate from character counts, shown live.\n**AC:** a mock with a converging pair stops early with the reason \"converged\". The budget stop writes a valid `final.md`.\n\n### S5. Control channel: stop, resume, interject\n`.ping-pong/<run>/inbox.jsonl` is read between hits. It supports `stop`, `pause`, `answer <question>` (added as O-*) and `note`. Write to it with `rally.py say \"...\"`, from a text box in the court, or by the host agent relaying the user. `rally.py resume <run>` continues from `state.json`. With `--ask`, the rally pauses after the open-up phase so open questions can be answered.\n**AC:** killing the process mid-hit and resuming finishes the rally with no duplicate hits. An interjected answer shows up as O-* in the next prompt.\n\n### S6. Deliverable shape by criteria\nIn the converge phase, players also return `shape: {kind: non-code|one-shot|slices, est_files, est_sessions, unknowns}`. Rule: non-code if no code is involved; one-shot if est_sessions ≤1, est_files ≤~10 and no unresolved O-conflicts; otherwise slices. The umpire can override, but must say why in the report.\n**AC:** `OUTPUTS.md` templates per shape. For slices, each one has a goal, scope and acceptance criteria and works with `/to-issues`.\n\n### S7. Court v2 (signature)\nKeep the side-view table, paddles and flying ball. Add: ledger panel (new decisions flash in), live phase label, score per hit (\"point\" when score_in rises), commentary lines generated from `changes`, ⚠ on faults with a net animation, inbox text box, end-of-match card (winner = player whose versions scored higher) and offline `replay.html`.\n**AC:** works from `file://` replay without a server, and the live view updates within 2s of a state change.\n\n### S8. Pet tiers + portability\nPet tiers: Claude Code statusline (default offer). Cursor statusline is opt-in only, with a warning that it replaces the footer. OpenCode toast fires only at hit end and at match end. Chat frames stay the universal fallback. Windows: use `sys.executable` everywhere, run a generated launcher `.py` instead of shlex-quoted commands, and use `pathlib` paths.\n**AC:** `setup_pet.py --dry-run` shows the config diff. `--uninstall` restores the backup byte-for-byte. Tests pass on macOS, Linux and Windows.\n\n### S9. Test harness\n`mock:` players with fault injection (bad JSON, timeout, ledger violation, converge). `python -m unittest` covers every slice's AC with no network.\n**AC:** the suite runs in under 30s, and CI is a stdlib-only matrix.\n\n## SKILL.md v2 (≤100 lines, 7 steps)\nargs (idea, hits, `--ask`, budget) → `doctor` if no cache → start the rally in the background → show the court and offer the pet once → poll every ~60s with a frame and relay user input via `say` → shape the deliverable by the S6 rule → report the run dir, ledger, conflicts and next step.\n\n## Out of scope (v2)\nThird-model judge (possible later as `--judge <spec>`), parallel or multi-player rallies, GUI-host pets.\n\n## Suggested order\nS9 → S1 → S2 → S4 → S5 → S3 → S6 → S7 → S8. Reliability first, fun last but guaranteed.",
+   "changes": [
+    "Framed the output as a ticket-ready spec in 9 vertical slices, each with acceptance criteria",
+    "Added a decision ledger (O-*/P-*) and validation to stop silently dropped ideas",
+    "Added a doctor smoke test and moved adapters into a JSON data table to handle CLI flag churn",
+    "Added vendor resolution and a same-vendor guard",
+    "Replaced the third-model judge with player scores, best-version keeping and difflib early stop",
+    "Added a budget, a per-hit timeout, and a file-based inbox for stop, pause, resume and interject",
+    "Added measurable criteria for the deliverable shape, with an umpire override",
+    "Made the court carry the fun: ledger panel, commentary, points, match card, inbox box",
+    "Tiered the pet: Cursor opt-in, OpenCode toasts throttled, plus a Windows launcher fix",
+    "Added a mock fault-injection test harness and a build order"
+   ],
+   "open_questions": [
+    "Should the final deliverable default to the best-scored version or always the last one?",
+    "Is a pause for user answers after the open-up phase (--ask) wanted by default, or only on request?",
+    "Which hosts matter most if pet effort must be cut: Claude Code only?",
+    "Should a ledger violation count as a fault (retry, then lose the hit) or just a warning?",
+    "Is CI (e.g. GitHub Actions on 3 OSes) available for this repo?"
+   ],
+   "owner_conflicts": [],
+   "decisions": [
+    {
+     "op": "add",
+     "id": "",
+     "text": "P-1: A decision ledger (O-* owner, P-* player) is passed every hit and validated by rally.py",
+     "reason": ""
+    },
+    {
+     "op": "add",
+     "id": "",
+     "text": "P-2: CLI adapters live in adapters.json and are verified by `rally.py doctor`, with cached results",
+     "reason": ""
+    },
+    {
+     "op": "add",
+     "id": "",
+     "text": "P-3: No third judge model by default; players score incoming versions, the best version is kept, and the rally stops early on convergence",
+     "reason": ""
+    },
+    {
+     "op": "add",
+     "id": "",
+     "text": "P-4: A file-based inbox (inbox.jsonl) is the single mechanism for stop, pause, resume and interjection",
+     "reason": ""
+    },
+    {
+     "op": "add",
+     "id": "",
+     "text": "P-5: Deliverable shape is decided by an explicit rule over player-reported estimates, and the umpire may override with a stated reason",
+     "reason": ""
+    },
+    {
+     "op": "add",
+     "id": "",
+     "text": "P-6: The court is the main fun surface; the pet is tiered (Claude Code default, Cursor opt-in, OpenCode throttled)",
+     "reason": ""
+    },
+    {
+     "op": "add",
+     "id": "",
+     "text": "P-7: Deliverable is a ticket-ready spec in vertical slices, each with acceptance criteria, built test-harness first",
+     "reason": ""
+    }
+   ],
+   "parsed": true,
+   "phase": "open",
+   "size_budget": 7182,
+   "over_budget": false,
+   "lines_kept": null,
+   "size_ratio": null
+  },
+  {
+   "n": 2,
+   "side": 1,
+   "player": "Codex",
+   "seconds": 219.2,
+   "critique": "The incoming spec has a strong structure, but several guarantees exceed what its mechanisms can prove. A ledger cannot detect semantic omissions by itself; model self-identification cannot verify vendor diversity; peer scores are uncalibrated and leave the final rewrite unscored. Similarity alone can mistake formatting stability for convergence. Controls checked only between hits cannot stop a hung call, and crash-safe resume needs atomic state and command acknowledgements. Doctor needs cache invalidation and real compatibility evidence. Pet uninstall must preserve later user edits. The revision keeps P-1 through P-7 while making these limits and implementation rules explicit.",
+   "version": "# ping-pong v2: ticket-ready spec\n\n## Goal\nA coding-agent skill rallies an idea between two different LLMs. Each hit critiques and rewrites the current version; the host agent acts as umpire. Early hits explore, middle hits deepen, and late hits converge. The host shapes the result into a useful non-code document, a one-shot build prompt, or a spec in vertical slices.\n\nKeep Python stdlib only, no dependency installs, SKILL.md ≤100 lines, and the side-view ping-pong court as the signature. Retain Claude Code, Codex CLI, Cursor CLI, OpenCode, Copilot/Gemini adapters; API players `anthropic:`, `openai:`, `gemini:`, `openrouter:`; and offline `mock:` players. GUI hosts use the same scripts where shell access exists; pet support depends on available hooks.\n\n## Protocol\nEach request includes the original brief, latest accepted version, opponent notes, active O-*/P-* ledger, owner answers, unanswered questions, phase and remaining limits. Replies contain `critique`, `version`, `changes`, `open_questions`, `owner_conflicts`, `decisions`, `score_in`, `requirements_check` and `done`; converge replies also contain `shape`.\n\nThe runner validates types, length and ledger operations, and assigns new P-* IDs. O-* entries are explicit owner requirements and cannot be dropped by players; P-* drops require reasons. `requirements_check` maps each active ID to an exact supporting excerpt or a stated conflict. The runner verifies IDs and excerpts, but semantic compliance still requires host review. Preserve the original brief verbatim; unresolved O-conflicts prevent a ready-to-build label.\n\nOne hit converges; two hits deepen then converge; longer rallies use roughly thirds and always end in convergence. Converge adds no new scope. Failed attempts do not consume hits: retry once with the error, then let the opponent try. Two consecutive player turns that exhaust their attempts stop the rally. Disclose fallback that breaks alternation.\n\n## S1 — Runnable offline harness and durable state\nBuild a two-hit mock rally first. Fixtures inject malformed JSON, extra prose, timeout, illegal ledger operations, fallback, convergence and crashes. Each later slice extends this working harness.\n\nKeep `.ping-pong/<timestamp>-<slug>/` containing `state.json`, `final.md`, `court.html`, `replay.html` and `inbox.jsonl`; retain `~/.ping-pong/active.json` as a convenience pointer. State records brief, players, versions, ledger, scores, attempts, command acknowledgements and stop reason. Write state by atomic sibling-file replacement. An exclusive runner lock prevents concurrent advancement; stale-lock recovery checks process identity.\n\n**Acceptance:** network-free `python -m unittest` completes in under 30s; interrupted writes leave readable state; concurrent resume is refused; reissued interrupted calls never duplicate accepted hits, although they may incur another charge.\n\n## S2 — Ledger and bounded context\nSend the latest version and notes, full active ledger and original brief; retain all versions locally. Show decisions in final output and replay. If mandatory context exceeds its cap, pause with an explanation instead of silently truncating owner content.\n\n**Acceptance:** a six-hit fixture preserves O-* entries. Illegal drops, missing coverage IDs and nonexistent supporting excerpts trigger retry. Document semantic omission as a host-review limitation.\n\n## S3 — Adapter discovery and doctor\nPut executable names, argv templates, alternate flags, timeout, output format, version command and model/provider hints in `adapters.json`. Run argument arrays without a shell. Shared parsers handle text/JSON/JSONL envelopes; exceptional parsing uses small named functions. CLIs run in temporary directories away from the user's repo, with tools disabled where supported. A temporary working directory alone is not a sandbox.\n\n`doctor` discovers executables, versions and credential availability without printing secrets. `doctor --probe` makes tiny JSON requests and may incur charges; the skill explains this when probing. Cache by executable path/version, adapter revision and model selection, with a TTL. Changed identity invalidates the cache. Failed probes are excluded from auto-pick. Preserve `PING_PONG_MODEL_<VENDOR>` overrides.\n\n**Acceptance:** report identity, cache age, status and latency; test envelope parsing and fallback flags offline. Record real smoke tests for each claimed CLI/version before release; mocks do not prove compatibility.\n\n## S4 — Honest diversity\nRecord host executable, model ID, underlying provider and evidence separately. Use explicit configuration or reliable metadata, never model self-identification. OpenRouter is a transport; unknown routing remains unknown.\n\nAuto-pick prefers verified different providers and distinct models. Same-provider pairs require `--allow-same-vendor`; unknown pairs require `--allow-unverified-pair`. Both carry persistent warnings. If no eligible pair exists, show available choices and stop before starting the rally.\n\n**Acceptance:** Cursor using Anthropic plus Claude is recognized as same-provider; absent metadata never becomes a verified diversity claim.\n\n## S5 — Selection, convergence and budgets\nNo third judge by default. `score_in` rates the incoming version using an anchored 1–10 rubric for owner fidelity, clarity, completeness and feasibility. Store grader identity. Scores are peer judgments, not calibrated measurements.\n\nSelect the highest-scored candidate compatible with the current ledger; prefer the latest when it is within one point of the best. Owner interjections or ledger changes start a new comparison epoch, so obsolete candidates cannot win. Compatibility comes from recorded coverage, with host review required.\n\nThe last rewrite is unscored: request one bounded score-only response from its opponent, counted as a request but not a hit. If unavailable, use the latest only when its predecessor was within one point of the best and it declares no substantive or ledger changes; otherwise select the best compatible scored candidate. With none available, retain the latest for host review. Explain selection provenance.\n\nEarly stop requires at least three accepted hits, two consecutive `difflib` ratios >0.95, no ledger changes or O-conflicts, and both players declaring `done`. Make it disableable; similarity alone never stops play.\n\nAdd `--max-minutes`, `--max-requests` and `--per-hit-timeout` (default 300s). Count retries, fallback and final scoring. Persist active elapsed time across resume, excluding pauses. Enforce deadlines during calls and terminate subprocess trees where supported. Display provider usage when returned; otherwise label character-based token counts as estimates. No dollar-cap guarantee for opaque CLI billing.\n\n**Acceptance:** test final scoring failure, obsolete candidates, formatting-only similarity, request exhaustion and timeout. Every stop yields valid partial output and a reason.\n\n## S6 — One control channel and safe resume\n`inbox.jsonl` accepts `stop`, `pause`, `resume`, `answer` and `note`, each with a unique ID, timestamp and payload. `rally.py say`, court controls and host relays share a locked append writer. Commit acknowledgements with state; duplicate IDs have no repeated effect. Ignore incomplete trailing lines until complete; report malformed complete lines.\n\nPoll controls during calls as well as between hits. Stop cancels the attempt and finalizes partial output. Pause cancels it and preserves the next hit. Notes and answers queue for the next request without cancelling paid work. Answers link stable question IDs, resolve questions and add owner decisions to O-*; ordinary notes remain context unless stated as requirements.\n\n`rally.py resume <run>` obtains the runner lock, appends resume and continues committed state. It never silently switches models. `--ask` pauses after exploration, or before the final hit when there is no exploration phase.\n\n**Acceptance:** stop interrupts a blocked mock; duplicate commands are harmless; crash/resume preserves acknowledged input and accepted-hit numbering.\n\n## S7 — Deliverable rules and handoff\nConverge replies return `shape: {kind, est_files, est_sessions, unknowns, rationale}`. Use conservative available estimates: non-code when no implementation is requested; one-shot when sessions ≤1, files ≤10, no blocking unknowns and no O-conflicts; otherwise slices. Missing code estimates default to slices. Preserve owner-requested form and language. The host may override with a stated reason; estimates are packaging guidance, not execution guarantees.\n\n`final.md` contains the selected idea, provenance, ledger, conflicts and questions. The host uses `OUTPUTS.md` to create separate `deliverable.md`. Slice specs include goal, scope, dependencies and acceptance criteria suitable for `/to-tickets` or `/to-issues`. Blocking owner decisions remain explicit.\n\n**Acceptance:** cover conflicting/missing estimates and owner format overrides. This v2 deliverable remains a vertical-slice spec.\n\n## S8 — Court, replay and pet\nRetain table, paddles, flying ball, scoreboard, hit dots, rally log and copy button. Add phase, thinking/retrying/paused states, ledger flashes, budgets and selection provenance. Animate faults at the net. Label scores as peer ratings rather than an objective winner; respect reduced motion.\n\nServe on loopback. Require a per-run token and valid origin for control POSTs; escape all user/model content. Replay embeds snapshots, works via `file://` and disables controls. Browser-open failure prints the URL. Chat frames remain the universal fallback, pasted about once per minute.\n\nOffer the pet once: Claude Code statusline; Cursor opt-in with footer warning; OpenCode toasts only at hit/match end. Hosts without hooks use court/chat. Installation wraps existing statuslines and backs up config; `--dry-run` shows edits. Uninstall restores bytes only if config is unchanged since installation; otherwise remove owned settings or report a merge conflict. Use `sys.executable`, `pathlib` and tested host-specific launcher syntax.\n\n**Acceptance:** live updates within 2s; replay works offline; injected text cannot execute; unauthorized controls fail; later config edits survive uninstall. Verify macOS/Linux/Windows before claiming parity.\n\n## Delivery\nBuild S1 → S2 → S3 → S4 → S5 → S6 → S7 → S8; every slice adds observable behavior and offline checks. SKILL.md keeps seven steps: read args → discover/select → start background rally → show court/offer pet → poll/relay → shape deliverable → report artifacts/conflicts/next action. Put schemas, adapters and templates in supporting files.\n\nOut of scope: third judge, parallel rallies, GUI-specific pets and guaranteed accounting for opaque subscriptions.",
+   "changes": [
+    "Kept P-1 through P-7 and compressed the complete spec within the version limit.",
+    "Added coverage declarations while distinguishing structural validation from semantic review.",
+    "Defined atomic state, runner locking and idempotent control acknowledgements.",
+    "Replaced model self-identification with explicit diversity evidence.",
+    "Specified doctor cache invalidation, paid probes and real compatibility checks.",
+    "Handled the unscored final rewrite and candidates made obsolete by steering.",
+    "Strengthened convergence and enforced budgets during calls.",
+    "Made stop and pause interrupt active attempts.",
+    "Separated runner output from the host-shaped deliverable.",
+    "Protected localhost controls, offline replay and later pet configuration edits."
+   ],
+   "open_questions": [
+    "Which real CLI versions must pass smoke tests for the initial v2 release?",
+    "What default total request and time limits should a new rally use?"
+   ],
+   "owner_conflicts": [],
+   "decisions": [
+    {
+     "op": "add",
+     "id": "",
+     "text": "P-8: Ledger coverage uses supporting excerpts and host semantic review; automated validation does not claim to prove requirement fidelity.",
+     "reason": ""
+    },
+    {
+     "op": "add",
+     "id": "",
+     "text": "P-9: Provider diversity requires configuration or reliable metadata; unknown pairs need an explicit override.",
+     "reason": ""
+    },
+    {
+     "op": "add",
+     "id": "",
+     "text": "P-10: Durable state is atomic, runners are exclusive, and inbox commands are acknowledged idempotently; controls are polled during calls.",
+     "reason": ""
+    },
+    {
+     "op": "add",
+     "id": "",
+     "text": "P-11: Final scoring is a bounded score-only request; ledger changes invalidate old comparisons, and convergence needs both players' agreement.",
+     "reason": ""
+    },
+    {
+     "op": "add",
+     "id": "",
+     "text": "P-12: Doctor caches by execution identity and adapter revision; claimed compatibility requires real smoke tests.",
+     "reason": ""
+    },
+    {
+     "op": "add",
+     "id": "",
+     "text": "P-13: Court controls are authenticated on loopback, replay is inert, and pet uninstall preserves subsequent user edits.",
+     "reason": ""
+    }
+   ],
+   "parsed": true,
+   "phase": "deepen",
+   "size_budget": 7753,
+   "over_budget": true,
+   "lines_kept": 0.028,
+   "size_ratio": 1.8
+  },
+  {
+   "n": 3,
+   "side": 0,
+   "player": "Claude Code",
+   "seconds": 84.7,
+   "critique": "Codex's hit 2 fixed real problems. The ledger no longer claims to prove fidelity, diversity no longer trusts what a model says about itself, the final rewrite gets scored, stop works during a call, and state survives a crash. The cost is that the spec has drifted from the owner's 'keep it simple' requirement and is missing some concrete details. (1) Slices are uneven. S5 bundles scoring, selection, convergence, budgets and process-tree killing, so it is several sessions of work and not one ticket. (2) Nothing caps how big the code can get. The brief asks for simplicity but the spec has no file layout or size limits, so rally.py could grow without bound. (3) The command-line interface and data formats are only described in prose. `/to-tickets` and an implementer need the subcommands, exit codes, one reply example, one inbox line and one adapter entry. (4) requirements_check asks for an exact excerpt for every active ledger ID on every hit. With 13+ entries, replies get bloated and more of them fail validation, and each retry costs money. Exact-substring matching also breaks on whitespace and markdown differences. (5) The court arrives last (S8), so the signature visual is untested through seven slices. It should keep working from S1. (6) 'More fun' is barely addressed. The court gets status states but no moments worth watching. (7) Owner answers automatically become O-* non-negotiables, which can lock in a passing remark. (8) The context cap and default limits (doctor cache lifetime, version length per phase) are not given as numbers. (9) Mandatory final scoring adds cost on every run, and there is no way to turn it off.",
+   "version": "# ping-pong v2: ticket-ready spec\n\n## Goal\nA coding-agent skill that rallies an idea between two different LLMs. On each hit, one model critiques the current version and rewrites it. The host agent acts as umpire. Early hits explore, middle hits deepen and late hits converge. The host turns the result into a non-code document, a one-shot build prompt, or a spec in vertical slices.\n\nConstraints: Python stdlib only, no installs, SKILL.md ≤100 lines, and the side-view ping-pong court as the signature element. Keep the CLI players `cli:claude|codex|cursor|opencode|copilot|gemini`, the API players `anthropic:|openai:|gemini:|openrouter:`, and offline `mock:` players. GUI hosts use the same scripts wherever they have shell access. Pet support depends on which hooks a host offers.\n\n## Simplicity budget\nFiles: `SKILL.md`, `OUTPUTS.md`, `adapters.json`, `compat.json`, `scripts/{rally,players,court,pet,setup_pet}.py`, `tests/`. No script over 800 lines. A feature ships only if it has an offline test; otherwise it is marked experimental and off by default. Each slice below is sized to fit one agent session (S ≈ <300 changed lines, M ≈ <600).\n\n## Command surface\n`rally.py start --idea FILE --hits N [--players A,B] [--max-minutes M] [--max-requests R] [--per-hit-timeout 300] [--ask] [--no-final-score] [--no-early-stop] [--allow-same-vendor] [--allow-unverified-pair]` · `status [run] [--json]` · `say [run] stop|pause|resume|note|answer ...` · `resume [run]` · `doctor [--probe]` · `frame [run]`. Exit codes: 0 finished, 2 bad args/no eligible pair, 3 stopped/budget (partial output written), 4 two consecutive faults, 5 lock held. `run` defaults to `~/.ping-pong/active.json`.\n\n## Protocol\nEach request carries: the original brief verbatim, the latest accepted version, the opponent's notes, the active O-*/P-* ledger, owner answers, open Q-* questions, phase, the version-length cap and remaining limits. Reply example:\n```json\n{\"critique\":\"…\",\"version\":\"…\",\"changes\":[\"…\"],\n \"open_questions\":[{\"text\":\"…\"}],\"closes\":[\"Q-2\"],\n \"owner_conflicts\":[{\"item\":\"O-1\",\"reason\":\"…\"}],\n \"decisions\":[{\"op\":\"add\",\"text\":\"…\"},{\"op\":\"drop\",\"id\":\"P-3\",\"reason\":\"…\"}],\n \"score_in\":{\"fidelity\":8,\"clarity\":7,\"completeness\":6,\"feasibility\":8},\n \"requirements_check\":{\"O-1\":\"excerpt ≤200 chars\",\"P-9\":\"excerpt\"},\n \"done\":false,\"shape\":null}\n```\nThe runner validates types, length and ledger operations, and assigns P-* and Q-* IDs. O-* entries are owner requirements that players cannot drop; dropping a P-* entry needs a reason. `requirements_check` must cover every O-* entry plus any P-* entry added, dropped or touched in this hit. Excerpts are matched after normalising whitespace and markdown, and a stated conflict also counts. Untouched P-* entries are spot-checked by the host, not by the runner. Passing the check means the reply is well-formed; it does not prove the reply honours the meaning, so the host still reviews (P-8). Any unresolved O-conflict blocks the ready-to-build label.\n\nPhases and version caps: 1 hit = converge. 2 hits = deepen, converge. N≥3: about a third each, ending in converge. Default caps are explore 12k, deepen 14k, converge 10k characters. Converge adds no new scope. A failed attempt does not use up a hit: the player retries once with the error, then the opponent takes the hit. Two consecutive turns that use up all their attempts stop the rally. Any fallback that breaks alternation is disclosed.\n\nOwner answers are recorded as `A-*` owner context and bind every later hit. An answer becomes O-* only when the owner marks it `--require` (`say answer Q-3 --require \"…\"`). The owner can override any O-* or A-* entry with a later answer that names its ID.\n\n## S1 — Offline harness, durable state, minimal court (M)\nA two-hit `mock:` rally runs end to end and serves today's court from `state.json`, so the signature visual works from the first slice. Fixtures cover malformed JSON, prose around the JSON, timeout, illegal ledger operations, fallback, convergence and a crash mid-hit.\n\nThe run directory `.ping-pong/<timestamp>-<slug>/` holds `state.json` (schema version, brief, players, hits[], ledger, questions, scores, attempts, acks[], budgets, stop_reason), `final.md`, `court.html`, `replay.html` and `inbox.jsonl`. State is written atomically (temp file in the same directory, fsync, rename). The exclusive runner lock stores pid + start time; a stale lock is broken only when that process is gone.\n\n**Acceptance:** a network-free `python -m unittest` finishes in <30s. A write killed partway leaves readable state. A second runner exits 5. A call reissued after an interruption never duplicates an accepted hit, though it may be charged twice.\n\n## S2 — Ledger, questions, bounded context (S)\nStore every version locally and send only the latest one. If mandatory context (brief + ledger + answers + version + notes) is over 60k characters, pause with an explanation and never silently truncate owner content. Q-* entries persist until a player closes them or the owner answers them. Decisions and questions appear in `final.md` and in the replay.\n\n**Acceptance:** O-* entries survive a six-hit fixture. Illegal drops, missing coverage and excerpts that don't match all trigger a retry. Whitespace-only differences in an excerpt still pass.\n\n## S3 — Adapters and doctor (M)\nAn `adapters.json` entry looks like:\n`{\"id\":\"cli:codex\",\"rev\":3,\"exe\":\"codex\",\"argv\":[\"exec\",\"--output-last-message\",\"{out}\",\"{prompt}\"],\"alt_argv\":[…],\"output\":\"file\",\"version\":[\"--version\"],\"provider\":\"openai\",\"model_flag\":\"--model\"}`.\nCommands run as argument arrays, never through a shell, inside a temp directory, with tools disabled where the CLI supports it. A temp directory is not a sandbox, and the docs say so. Shared parsers handle text, JSON and JSONL; any odd case gets a small named function.\n\n`doctor` lists executables, versions and whether credentials are present, without printing secrets. `doctor --probe` sends a tiny JSON request that may be billed, and the skill says so before running it. Cache keys are executable path + version + adapter rev + model; the cache lasts 7 days. Failed probes are excluded from auto-pick. `PING_PONG_MODEL_<VENDOR>` overrides stay. `compat.json` lists the CLI versions smoke-tested against real services, with dates. Compatibility is claimed only for those versions (P-12).\n\n**Acceptance:** the report shows identity, cache age, status and latency. Envelope parsing and fallback flags are tested offline. A version change invalidates the cache.\n\n## S4 — Honest diversity (S)\nRecord host executable, model ID, underlying provider and the evidence for it, each separately. Evidence comes from config or reliable metadata only, never from the model describing itself. OpenRouter is treated as a transport, and routing it doesn't reveal stays unknown. Auto-pick prefers verified different providers. Same-provider pairs need `--allow-same-vendor`; unknown pairs need `--allow-unverified-pair`. Both trigger a warning that stays on the court. If no pair qualifies, list the options and exit 2.\n\n**Acceptance:** Cursor running Anthropic paired with Claude is flagged as same-provider. Missing metadata is never shown as verified.\n\n## S5 — Scoring, selection, convergence (M)\nNo third judge by default. `score_in` rates the incoming version 1–10 on four anchored criteria (anchors live in the schema file). The runner stores who graded it. Scores are peer ratings, not measurements.\n\nSelection: the highest mean score among candidates that fit the current ledger epoch. The latest version wins if it is within 1.0 of the best. An owner answer or ledger change starts a new epoch, so outdated candidates can't win. The last rewrite is scored by one bounded score-only request to its opponent; this counts as a request, not a hit, and `--no-final-score` turns it off. Without that score, the latest version wins only if its predecessor was within 1.0 of the best and it declares no substantive or ledger changes. Otherwise the best scored candidate in the current epoch wins. If no candidate qualifies, the latest version goes to host review. `final.md` explains which version was chosen and why.\n\nEarly stop requires all of: at least 3 accepted hits, two consecutive `difflib` ratios >0.95 on normalised text, no ledger changes, no O-conflicts, and `done` from both players. Similarity alone never stops play.\n\n**Acceptance:** tests cover a failed final score, an outdated winner, similarity from formatting alone, and one player saying done.\n\n## S6 — Budgets and timeouts (S)\n`--max-minutes`, `--max-requests`, `--per-hit-timeout` (default 300s). Retries, fallbacks and final scoring all count as requests. Active elapsed time persists across resume and excludes pauses. Deadlines are enforced during calls, and the whole subprocess tree is terminated (process group on POSIX, `taskkill /T` on Windows). Provider usage is shown when the provider returns it; otherwise token counts are estimated as chars/4 and labelled as estimates. Dollar spend through CLIs with opaque billing is not guaranteed.\n\n**Acceptance:** running out of requests or hitting a timeout mid-call produces valid partial output with a stop reason and exit code 3.\n\n## S7 — Control channel and resume (M)\nOne `inbox.jsonl` line: `{\"id\":\"c-…\",\"ts\":\"…\",\"cmd\":\"answer\",\"q\":\"Q-3\",\"text\":\"…\",\"require\":false}`. Commands are `stop`, `pause`, `resume`, `answer` and `note`. `say`, court buttons and host relays all go through one locked append writer. Acknowledgements are committed together with state, so a repeated ID has no effect. An incomplete trailing line is ignored until it's complete; malformed complete lines are reported.\n\nControls are polled every second, including during calls. Stop cancels the current attempt and finalises. Pause cancels it and keeps the next hit queued. Notes and answers queue for the next request and don't cancel work already paid for. `resume` takes the lock, appends `resume` and continues from committed state on the same players; it never switches models silently. `--ask` pauses after the explore phase, or before the final hit if there is no explore phase, and shows the open Q-* questions.\n\n**Acceptance:** stop interrupts a blocked mock within 2s. Duplicate commands are harmless. Crash + resume keeps acknowledged input and hit numbering.\n\n## S8 — Deliverable rules (S)\nConverge replies include `shape: {kind, est_files, est_sessions, unknowns[], rationale}`. Take the more conservative estimate of the two players. Rules: non-code if no implementation is requested; one-shot if sessions ≤1, files ≤10, no blocking unknowns and no O-conflicts; otherwise slices. A code idea with no estimate defaults to slices. Any form or language the owner asks for wins. The host may override with a stated reason. `final.md` holds the selected idea, provenance, ledger, conflicts and questions. The host writes a separate `deliverable.md` from the `OUTPUTS.md` templates. Each slice includes goal, scope, dependencies, size and acceptance criteria, ready for `/to-tickets` or `/to-issues`.\n\n**Acceptance:** tests cover conflicting estimates, missing estimates and an owner format override.\n\n## S9 — Court and replay (M)\nKeep the table, paddles, flying ball, scoreboard, hit dots, rally log and copy button. Add phase, thinking/retrying/paused states, budget meters and selection provenance. Fun touches are derived only from recorded data, with no extra model calls:\n- **Ace**: a hit whose score rises ≥2 over the previous one.\n- **Let**: a retry.\n- **Fault**: the ball hits the net on a failed attempt.\n- **Ledger flash**: a new P-* entry sparks on the paddle that made it.\n- **Deuce**: two hits scored within 0.5 of each other.\n- **Match card** at the end: rally length, aces, faults, decisions added, winner by peer rating (labelled that way).\n\nReduced motion is respected.\n\nThe court serves on 127.0.0.1 only. Control POSTs need a per-run token and a matching Origin. All model and user text is escaped. The replay embeds snapshots, works over `file://` and has no controls. If the browser won't open, the URL is printed. `frame` prints the ASCII court; the host pastes it about once a minute in every UI.\n\n**Acceptance:** updates within 2s. The replay works offline. Injected `<script>` and markdown never execute. Unauthorised POSTs fail.\n\n## S10 — Pet (S)\nOffered once:\n- Claude Code: statusline at `refreshInterval: 1`.\n- Cursor: opt-in, with a warning that it replaces the native footer.\n- OpenCode: toasts only at hit end and match end.\n- Other hosts: court and chat frames.\n\n`setup_pet.py` wraps any existing statusline, backs up config and supports `--dry-run` and `--uninstall`. Uninstall restores the original bytes only if the config is unchanged since install; otherwise it removes only the keys it owns or reports a conflict. Commands use `sys.executable` and `pathlib`, with launcher quoting tested per host.\n\n**Acceptance:** user edits made after install survive uninstall. macOS/Linux are verified; Windows is claimed only after it is verified.\n\n## Delivery\nBuild S1→S10; each slice extends the working harness with visible behaviour and offline checks. SKILL.md has seven steps: read args → doctor/select → start the rally in the background → show the court and offer the pet once → poll, paste frames and relay owner input via `say` → shape the deliverable → report artifacts, conflicts and the next action. Schemas, rubric anchors, adapters and templates live in supporting files.\n\nOut of scope: a third judge, parallel rallies, GUI-specific pets, and guaranteed accounting for opaque subscriptions.",
+   "changes": [
+    "Added a simplicity budget: fixed file list, 800-line cap per script, offline test required for anything on by default",
+    "Gave the command surface concretely: subcommands, flags and exit codes",
+    "Added concrete examples of a reply, an adapter entry and an inbox line",
+    "Limited requirements_check to O-* plus P-* touched this hit, with normalised excerpts of ≤200 chars",
+    "Split the old S5 into scoring/selection (S5) and budgets/timeouts (S6), and the old S8 into court (S9) and pet (S10); every slice has a size",
+    "Moved a minimal live court into S1 so the signature visual works from the start",
+    "Added fun touches derived from recorded data: ace, let, fault, ledger flash, deuce, match card",
+    "Owner answers become A-* context by default; they become O-* only with --require; the owner can override by ID",
+    "Gave numbers: 60k-char context cap, per-phase version caps, 7-day doctor cache, 1s control polling",
+    "Made final score-only request skippable with --no-final-score",
+    "Specified how the whole subprocess tree is terminated on POSIX and on Windows"
+   ],
+   "open_questions": [
+    "Should the final score-only request stay on by default, given it adds one billed request per run?",
+    "Which host CLIs must have real smoke tests in compat.json before v2 is released (minimum set)?",
+    "Is Windows parity required for v2, or acceptable as a later follow-up once it's verified?",
+    "Should owner answers become non-negotiable (O-*) by default, or stay as A-* context unless marked --require?",
+    "What default number of hits should the skill use when the user doesn't give one?"
+   ],
+   "owner_conflicts": [],
+   "decisions": [
+    {
+     "op": "add",
+     "id": "",
+     "text": "P-14: Simplicity budget — fixed file layout, no script over 800 lines, every slice sized to one agent session, and features without offline tests are off by default",
+     "reason": ""
+    },
+    {
+     "op": "add",
+     "id": "",
+     "text": "P-15: rally.py exposes start/status/say/resume/doctor/frame with defined exit codes; reply, adapter and inbox formats are given by concrete examples",
+     "reason": ""
+    },
+    {
+     "op": "add",
+     "id": "",
+     "text": "P-16: requirements_check covers all O-* plus P-* entries touched this hit, using whitespace/markdown-normalised excerpts of ≤200 chars; other entries are spot-checked by the host (refines P-8)",
+     "reason": ""
+    },
+    {
+     "op": "add",
+     "id": "",
+     "text": "P-17: A minimal court ships in S1; court fun features (ace, let, fault, deuce, match card) come only from recorded data, with no extra model calls",
+     "reason": ""
+    },
+    {
+     "op": "add",
+     "id": "",
+     "text": "P-18: Owner answers are A-* binding context by default and become O-* only when marked --require",
+     "reason": ""
+    }
+   ],
+   "parsed": true,
+   "phase": "deepen",
+   "size_budget": 13980,
+   "over_budget": false,
+   "lines_kept": 0.023,
+   "size_ratio": 1.26
+  },
+  {
+   "n": 4,
+   "side": 1,
+   "player": "Codex",
+   "seconds": 282.4,
+   "critique": "The incoming spec preserves the signature court and makes reliability testable, but several details conflict or remain ambiguous: new decisions need evidence before they receive IDs; dropped decisions cannot supply excerpts from the new version; mid-call owner answers can make a reply stale; API calls need cancellation as well as CLI calls; skipped final scoring cannot justify treating an unscored rewrite as scored; and a resume command cannot restart an exited runner by itself. The fixed layout also omits the referenced schema file. This version resolves those points, keeps all carried decisions, and trims repeated explanation. Slice sizes remain estimates; declared seams provide smaller tickets when needed.",
+   "version": "# ping-pong v2: ticket-ready spec\n\n## Goal and constraints\nAn Agent Skill that rallies an idea between two different LLMs. Each hit critiques the incoming version and rewrites it. Early hits explore, middle hits deepen, late hits converge. The host agent acts as umpire and turns the selected result into a usable non-code document, a one-shot build prompt, or a ticket-ready spec in vertical slices.\n\nPython stdlib only; no dependency installs; SKILL.md ≤100 lines. Keep the side-view ping-pong court as the signature element. Preserve players `cli:claude|codex|cursor|opencode|copilot|gemini`, `anthropic:<model>`, `openai:<model>`, `gemini:<model>`, `openrouter:<model>` and offline `mock:<name>`. Installed player CLIs and API credentials are prerequisites. GUI hosts use the scripts wherever shell access exists; unavailable hooks fall back to court and chat frames.\n\nFixed layout: `SKILL.md`, `OUTPUTS.md`, `adapters.json`, `compat.json`, `schema.json`, `scripts/{rally,players,court,pet,setup_pet}.py`, `tests/`. No script exceeds 800 lines. Features without offline tests are experimental and off by default; real-service compatibility also requires real smoke tests. Each ticket must fit one agent session. S/M are estimates; split oversized slices at their stated seams before ticketing, without deleting required behavior.\n\n## Commands and artifacts\n`rally.py start --idea FILE --hits N [--players A,B] [--max-minutes M] [--max-requests R] [--per-hit-timeout 300] [--ask] [--no-final-score] [--no-early-stop] [--allow-same-vendor] [--allow-unverified-pair]`\n\nAlso: `status [run] [--json]`, `say [run] stop|pause|resume|note|answer ...`, `resume [run]`, `doctor [--probe]`, `frame [run]`. `run` defaults to `~/.ping-pong/active.json`. `say answer Q-3 --require \"…\"` creates an owner requirement. Positive hits and limits are required. Unset total budgets are shown explicitly.\n\nExit codes: 0 completed or command queued; 2 invalid args/no eligible pair; 3 paused, stopped or budget exhausted; 4 fault limit; 5 runner lock held. Queuing a command is distinct from its acknowledgement in state. `status --json` reports lifecycle and acknowledgement status.\n\nEach `.ping-pong/<timestamp>-<slug>/` holds `state.json`, `inbox.jsonl`, `final.md`, `court.html`, `replay.html`, and eventually host-authored `deliverable.md`. State records schema version, brief, player identities, accepted versions, attempts, ledger epochs, answers, questions, scores, command acknowledgements, budgets, lifecycle and selection reason. Write the active pointer atomically too.\n\n## Protocol and owner authority\nEach hit receives the original brief verbatim, latest accepted version, opponent notes, active O-*/P-* ledger, binding owner context, open Q-* questions, phase, version cap and remaining limits. Best-version selection does not change the version passed to the next hit.\n\nReply example:\n```json\n{\"critique\":\"…\",\"version\":\"…\",\"changes\":[\"…\"],\n \"open_questions\":[{\"text\":\"…\"}],\"closes\":[{\"id\":\"Q-2\",\"reason\":\"…\"}],\n \"owner_conflicts\":[{\"item\":\"O-1\",\"reason\":\"…\"}],\n \"decisions\":[{\"op\":\"add\",\"text\":\"…\",\"evidence\":\"excerpt\"},\n              {\"op\":\"drop\",\"id\":\"P-3\",\"reason\":\"…\"}],\n \"score_in\":{\"fidelity\":8,\"clarity\":7,\"completeness\":6,\"feasibility\":8},\n \"requirements_check\":{\"O-1\":\"excerpt\",\"P-9\":\"excerpt\"},\n \"done\":false,\"shape\":null}\n```\n\nValidate types, bounds, references and ledger operations; assign new P-* and Q-* IDs only on acceptance. Every retained O-* and declared touched P-* needs an excerpt ≤200 characters from `version`, matched after deterministic whitespace/markdown normalisation, or a referenced explicit conflict. New decisions use inline `evidence`; drops use their required reason. Mechanical checks cannot detect undeclared semantic changes: the host reviews those and spot-checks untouched entries. Validation proves structure and excerpt presence, not requirement fidelity.\n\nPlayers cannot drop O-* entries. P-* drops require reasons. Unresolved O-conflicts block a ready-to-build label. Answers become binding A-* context; `--require` creates O-* instead. Owner notes also bind later requests. Only explicit owner input naming an O-* or A-* ID can supersede it; preserve history and identify supersessions alongside the original brief. Never infer repeal from a casual remark. Q-* questions persist until answered or closed with a reason and remain visible in final artifacts.\n\nPhases: one hit = converge; two = deepen, converge. For N≥3, explore gets `floor(N/3)` hits, deepen gets `floor(N/3)`, converge gets the remainder. Caps: explore 12k, deepen 14k, converge 10k characters. Converge adds no major scope. If the complete request context exceeds 60k characters, pause and explain; never silently truncate owner content.\n\nA hit slot has at most three attempts: scheduled player, one retry with the error, one opponent fallback. Invalid output, timeout and provider failure are faults. Two consecutive slots exhausting all attempts stop the rally; acceptance resets this counter. Failures do not consume accepted hits. Disclose broken alternation. Stop, pause, total-budget exhaustion and superseded replies are not faults.\n\n## S1 — Offline harness, persistence, minimal court (M)\nImplement mock players and a two-hit rally with a working table, paddles, ball and state display. Every later slice extends this harness.\n\nWrite state through a same-directory temporary file, flush/fsync and atomic replacement. The exclusive runner lock records PID and process identity where available. Break it only when its process is demonstrably gone; uncertainty returns 5. The court never owns this lock. Commit each accepted hit and ledger changes together. Resume may reissue an uncommitted request, incurring another charge, but cannot duplicate an accepted hit.\n\nAcceptance: network-free `python -m unittest` completes in <30s. Fixtures cover malformed replies, supported envelopes, timeout, retry/fallback and crash recovery. Interrupted writes leave readable state; a second runner exits 5.\n\n## S2 — Ledger, questions, bounded context (S)\nImplement protocol validation, owner authority, historical versions and context caps. `schema.json` defines formats, normalisation and rubric anchors; enforce them with stdlib code, without a JSON Schema dependency.\n\nAcceptance: a six-hit fixture preserves owner requirements. Illegal drops, missing declared coverage and unmatched excerpts trigger retry; whitespace differences pass. Additions receive IDs after validation; drops require reasons rather than fabricated excerpts. Supersession stays auditable. Decisions and questions appear in final artifacts and replay.\n\n## S3 — Adapters and doctor (M; seam: CLI/API)\nAdapter example, illustrating format rather than claimed compatibility:\n```json\n{\"id\":\"cli:codex\",\"rev\":3,\"exe\":\"codex\",\n \"argv\":[\"exec\",\"--output-last-message\",\"{out}\",\"{prompt}\"],\n \"alt_argv\":[],\"output\":\"file\",\"version\":[\"--version\"],\n \"provider\":\"openai\",\"model_flag\":\"--model\"}\n```\nRun argument arrays without a shell in a temp directory; disable tools where supported. Document that a temp directory is not a sandbox. Prefer supported stdin/file prompts when argument limits matter. Shared parsers handle text, JSON and JSONL envelopes; unusual adapters use small named functions. Reject unexplained prose around JSON.\n\nAPI transports use stdlib HTTP with finite timeouts. Blocking calls run in cancellable worker processes so controls and deadlines remain responsive for all players. API cancellation ends local waiting; remote computation or billing may continue. CLI cancellation targets the process tree.\n\n`doctor` reports executable/version, configured model/provider evidence and credential presence without secrets. `--probe` sends a tiny potentially billed JSON request; SKILL.md discloses this before invocation. Cache for seven days by executable path/version or API endpoint, adapter revision, model and routing configuration. Failed probes are excluded from auto-pick; unprobed players are labelled unverified. Preserve `PING_PONG_MODEL_<VENDOR>` overrides. `compat.json` records exact real-service smoke-tested identities, dates and outcomes; compatibility claims cover only those configurations.\n\nAcceptance: report identity, cache age, status and latency. Offline tests cover envelopes, fallback flags and identity invalidation. API mocks demonstrate cancellation and deadlines.\n\n## S4 — Honest diversity (S)\nRecord host executable, model ID, underlying provider and evidence separately. Use configuration or reliable metadata, never player self-description. OpenRouter is transport; undisclosed routing remains unknown.\n\nAuto-pick prefers verified different providers. Same-provider pairs require `--allow-same-vendor`; unknown pairs require `--allow-unverified-pair`. Persist warnings on the court. Reject an identical known model pair; neither override makes identical models different LLMs. If no pair qualifies, list options and exit 2.\n\nAcceptance: Cursor configured for Anthropic plus Claude is flagged as same-provider; unknown metadata is never verified; identical known models are rejected.\n\n## S5 — Scoring, selection, convergence (M; seam: selection/early stop)\nNo third judge. Players score the incoming candidate 1–10 on fidelity, clarity, completeness and feasibility. Criterion-specific anchors live in `schema.json`: 1 fundamental failure, 5 usable with major gaps, 10 ready for its requested purpose. Store scorer, candidate and epoch IDs. Peer ratings are opinions, not measurements.\n\nA ledger change or new binding owner input starts an epoch. Scores of incoming versions belong to the context under which they were evaluated, not to the subsequent rewrite. Within the current epoch, select the highest mean score; prefer the latest scored candidate if within 1.0 of the best. Host requirement review is required before delivery. Older epochs cannot win.\n\nAfter the last accepted hit, make one bounded score-only request to its opponent under current context. It returns candidate/epoch reference, scores and conflicts, without rewrite or ledger edits. It counts as a request, not a hit; `--no-final-score` disables it. On failure or omission, choose the best scored current-epoch candidate. If none exists, present the latest accepted version as unscored for host review. Never borrow a predecessor's score. Record selection and whether final scoring failed or was skipped.\n\nEarly stop requires ≥3 accepted hits, two consecutive normalised `difflib` ratios >0.95, no epoch changes across those comparisons, no unresolved O-conflicts, and `done:true` from both players on their latest accepted turns in that epoch. Similarity alone cannot stop play.\n\nAcceptance: fixtures cover outdated winners, last-hit ledger changes, missing/failed final scores, formatting-only similarity and only one player declaring done.\n\n## S6 — Budgets and cancellation (S)\nOptional `--max-minutes` and `--max-requests`; `--per-hit-timeout` defaults to 300s. Count all dispatched generation and scoring requests, including retries/fallbacks. Doctor probes are separate and reported. Persist active elapsed time across resume, excluding pauses and runner downtime.\n\nEnforce deadlines during calls. Per-hit timeout faults the attempt; total-budget exhaustion cancels it, writes partial artifacts and exits 3. Terminate CLI process groups on POSIX and trees with `taskkill /T` on Windows; report any termination limitation. Show provider usage when supplied, otherwise label chars/4 as an estimate. Opaque subscriptions have no guaranteed dollar accounting.\n\nAcceptance: request/time budgets stop blocked mocks with valid partial output; per-hit timeout follows retry policy; pause time is excluded. Windows support claims require real platform checks.\n\n## S7 — Control channel and resume (M; seam: inbox/recovery)\nInbox example:\n```json\n{\"id\":\"c-…\",\"ts\":\"…\",\"cmd\":\"answer\",\"q\":\"Q-3\",\"text\":\"…\",\"require\":false}\n```\nCommands are stop, pause, resume, answer and note. `say`, court controls and host relays use one locked append writer. Commit acknowledgements with their state effects; repeated IDs have no effect. Ignore an incomplete trailing line until completed; report malformed complete lines.\n\nPoll at least every second during calls. Stop cancels the attempt and finalises partial output. Pause cancels it, keeps the hit queued, commits paused state and exits 3, releasing the lock. `resume` acquires the lock, appends/processes resume and continues with the same players. `say resume` queues intent only; the host must invoke `resume` to launch an exited runner. The court explains this distinction.\n\nNotes/answers queue durably without immediately cancelling paid work. If binding context changes during a call, retain its reply as a superseded attempt, reject its version/ledger edits and repeat the hit with updated context. Count the request, not a fault. Drain pending commands before accepting a reply or finalising selection; never commit a reply against stale binding context.\n\n`--ask` pauses after explore, or before the final hit if there is no explore phase, and shows open questions. Resume without answers is allowed; the checkpoint fires once.\n\nAcceptance: stop interrupts a blocked mock within 2s; duplicates are harmless; crash/resume preserves acknowledgements and numbering; mid-call owner input cannot produce stale acceptance; one-hit `--ask` pauses once.\n\n## S8 — Deliverable rules (S)\nConverge replies include `shape: {kind, est_files, est_sessions, unknowns[], rationale}`. Use each player's latest current-epoch estimate; combine code estimates with maxima and the union of blocking unknowns. Missing either estimate defaults code to slices.\n\nRules: non-code when implementation is not requested; one-shot when sessions ≤1, files ≤10, no blocking unknowns and no unresolved O-conflicts; otherwise vertical slices. Explicit owner form/language wins. The host may override classification with a recorded reason.\n\n`final.md` contains selected idea, provenance, ledger, conflicts and questions. After fidelity review, the host writes separate `deliverable.md` using `OUTPUTS.md`: usable non-code document, one-shot prompt, or slices with goal, scope, dependencies, size and acceptance criteria, ready for `/to-tickets` or `/to-issues`. Conflicts and blocking unknowns remain visible and prevent a ready-to-build label.\n\nAcceptance: fixtures cover conflicting/missing estimates, owner-input invalidation and owner format overrides. Tests verify classification, not host editorial judgment.\n\n## S9 — Court and replay (M)\nExtend S1 with scoreboard, hit dots, rally log, copy button, phase, thinking/retrying/paused states, budget meters and selection provenance. The ball travels toward the active player. Recorded-data fun only: ace for score gain ≥2, let for retry, net fault for failed attempt, paddle flash for a new decision, deuce for scores within 0.5, final match card with hits, aces, faults, decisions and selected version. Compare ratings only within an epoch; omit ace/deuce and rating-winner claims without comparable scores. Label peer ratings and respect reduced motion.\n\nBind to 127.0.0.1; serve only run artifacts. Control POSTs require a per-run token, exact Origin and validated Host. Escape user/model content; do not render executable HTML. Offline replay embeds snapshots, has no token, controls or network dependency, and works over `file://`. Print the URL if browser opening fails. `frame` prints the ASCII court; host pastes it about once a minute in every UI.\n\nAcceptance: updates within 2s; offline replay works; injected script/markdown cannot execute; unauthorised controls and path traversal fail; unsupported comparisons produce no rating events.\n\n## S10 — Host pet (S; seam: statusline/OpenCode)\nOffer once: Claude Code statusline with `refreshInterval: 1` where verified; Cursor opt-in with footer-replacement warning; OpenCode toasts only at hit/match end. Others use court/frames. Claude Code is the preferred default tier, with installation offered rather than silent config edits. Hooks remain experimental/off by default until smoke-tested.\n\n`setup_pet.py` wraps existing statuslines, backs up config, supports `--dry-run`/`--uninstall`. Restore original bytes only if config is unchanged since install; otherwise remove owned values only when they still match installation, or report a conflict. Preserve subsequent user edits. Use `sys.executable`, `pathlib` and host-specific tested quoting.\n\nAcceptance: offline fixtures preserve later edits; real macOS/Linux checks precede support claims; Windows waits for verified checks.\n\n## Delivery\nBuild S1→S10, splitting at declared seams when necessary. Every slice extends the working offline harness. SKILL.md keeps seven steps: read args → doctor/select → start background rally → show court/offer pet once → poll, relay input and paste frames → review/select/shape deliverable → report artifacts, conflicts and next action. Supporting files hold formats, rubric, adapters and templates.\n\nOut of scope: third judge, parallel rallies, GUI-specific pets and guaranteed subscription spend accounting.",
+   "changes": [
+    "Cut repetition while preserving the complete ticket-ready spec and carried decisions.",
+    "Added schema.json to the fixed layout and made phase rounding deterministic.",
+    "Defined evidence for new decisions and reasons for drops before IDs are assigned.",
+    "Made owner input invalidate stale in-flight replies and scoring epochs.",
+    "Removed inferred scores for unscored rewrites; missing scores now have an explicit fallback.",
+    "Defined cancellable API workers and separated per-attempt faults from total-budget stops.",
+    "Clarified queued resume versus launching an exited runner.",
+    "Kept court-first delivery, authenticated controls, inert replay and edit-preserving pet uninstall."
+   ],
+   "open_questions": [],
+   "owner_conflicts": [],
+   "decisions": [
+    {
+     "op": "add",
+     "id": "",
+     "text": "P-19: New decisions provide inline evidence before ID assignment; drops provide reasons. Host review detects undeclared semantic changes.",
+     "reason": ""
+    },
+    {
+     "op": "add",
+     "id": "",
+     "text": "P-20: Binding owner input supersedes in-flight replies; spent requests remain recorded, and the same hit repeats under updated context.",
+     "reason": ""
+    },
+    {
+     "op": "add",
+     "id": "",
+     "text": "P-21: Missing final scores select the best scored current-epoch candidate, or expose the latest version as unscored; predecessor scores are never inherited.",
+     "reason": ""
+    },
+    {
+     "op": "add",
+     "id": "",
+     "text": "P-22: All player calls use cancellable workers; API cancellation stops local waiting without promising remote cancellation or avoiding charges.",
+     "reason": ""
+    },
+    {
+     "op": "add",
+     "id": "",
+     "text": "P-23: Paused runners exit and release their lock; say resume queues intent, while resume launches continuation.",
+     "reason": ""
+    },
+    {
+     "op": "add",
+     "id": "",
+     "text": "P-24: Identical known model pairs are rejected; diversity overrides cover same-provider or unknown pairs only.",
+     "reason": ""
+    }
+   ],
+   "parsed": true,
+   "phase": "close",
+   "size_budget": 13585,
+   "over_budget": true,
+   "lines_kept": 0.138,
+   "size_ratio": 1.26
+  }
+ ],
+ "faults": [],
+ "owner_notes": [],
+ "consumed_notes": [],
+ "next_side": 0,
+ "ledger": [
+  {
+   "id": "P-1",
+   "by": "Claude Code",
+   "text": "P-1: A decision ledger (O-* owner, P-* player) is passed every hit and validated by rally.py",
+   "status": "standing",
+   "reason": null
+  },
+  {
+   "id": "P-2",
+   "by": "Claude Code",
+   "text": "P-2: CLI adapters live in adapters.json and are verified by `rally.py doctor`, with cached results",
+   "status": "standing",
+   "reason": null
+  },
+  {
+   "id": "P-3",
+   "by": "Claude Code",
+   "text": "P-3: No third judge model by default; players score incoming versions, the best version is kept, and the rally stops early on convergence",
+   "status": "standing",
+   "reason": null
+  },
+  {
+   "id": "P-4",
+   "by": "Claude Code",
+   "text": "P-4: A file-based inbox (inbox.jsonl) is the single mechanism for stop, pause, resume and interjection",
+   "status": "standing",
+   "reason": null
+  },
+  {
+   "id": "P-5",
+   "by": "Claude Code",
+   "text": "P-5: Deliverable shape is decided by an explicit rule over player-reported estimates, and the umpire may override with a stated reason",
+   "status": "standing",
+   "reason": null
+  },
+  {
+   "id": "P-6",
+   "by": "Claude Code",
+   "text": "P-6: The court is the main fun surface; the pet is tiered (Claude Code default, Cursor opt-in, OpenCode throttled)",
+   "status": "standing",
+   "reason": null
+  },
+  {
+   "id": "P-7",
+   "by": "Claude Code",
+   "text": "P-7: Deliverable is a ticket-ready spec in vertical slices, each with acceptance criteria, built test-harness first",
+   "status": "standing",
+   "reason": null
+  },
+  {
+   "id": "P-8",
+   "by": "Codex",
+   "text": "P-8: Ledger coverage uses supporting excerpts and host semantic review; automated validation does not claim to prove requirement fidelity.",
+   "status": "standing",
+   "reason": null
+  },
+  {
+   "id": "P-9",
+   "by": "Codex",
+   "text": "P-9: Provider diversity requires configuration or reliable metadata; unknown pairs need an explicit override.",
+   "status": "standing",
+   "reason": null
+  },
+  {
+   "id": "P-10",
+   "by": "Codex",
+   "text": "P-10: Durable state is atomic, runners are exclusive, and inbox commands are acknowledged idempotently; controls are polled during calls.",
+   "status": "standing",
+   "reason": null
+  },
+  {
+   "id": "P-11",
+   "by": "Codex",
+   "text": "P-11: Final scoring is a bounded score-only request; ledger changes invalidate old comparisons, and convergence needs both players' agreement.",
+   "status": "standing",
+   "reason": null
+  },
+  {
+   "id": "P-12",
+   "by": "Codex",
+   "text": "P-12: Doctor caches by execution identity and adapter revision; claimed compatibility requires real smoke tests.",
+   "status": "standing",
+   "reason": null
+  },
+  {
+   "id": "P-13",
+   "by": "Codex",
+   "text": "P-13: Court controls are authenticated on loopback, replay is inert, and pet uninstall preserves subsequent user edits.",
+   "status": "standing",
+   "reason": null
+  },
+  {
+   "id": "P-14",
+   "by": "Claude Code",
+   "text": "P-14: Simplicity budget — fixed file layout, no script over 800 lines, every slice sized to one agent session, and features without offline tests are off by default",
+   "status": "standing",
+   "reason": null
+  },
+  {
+   "id": "P-15",
+   "by": "Claude Code",
+   "text": "P-15: rally.py exposes start/status/say/resume/doctor/frame with defined exit codes; reply, adapter and inbox formats are given by concrete examples",
+   "status": "standing",
+   "reason": null
+  },
+  {
+   "id": "P-16",
+   "by": "Claude Code",
+   "text": "P-16: requirements_check covers all O-* plus P-* entries touched this hit, using whitespace/markdown-normalised excerpts of ≤200 chars; other entries are spot-checked by the host (refines P-8)",
+   "status": "standing",
+   "reason": null
+  },
+  {
+   "id": "P-17",
+   "by": "Claude Code",
+   "text": "P-17: A minimal court ships in S1; court fun features (ace, let, fault, deuce, match card) come only from recorded data, with no extra model calls",
+   "status": "standing",
+   "reason": null
+  },
+  {
+   "id": "P-18",
+   "by": "Claude Code",
+   "text": "P-18: Owner answers are A-* binding context by default and become O-* only when marked --require",
+   "status": "standing",
+   "reason": null
+  },
+  {
+   "id": "P-19",
+   "by": "Codex",
+   "text": "P-19: New decisions provide inline evidence before ID assignment; drops provide reasons. Host review detects undeclared semantic changes.",
+   "status": "standing",
+   "reason": null
+  },
+  {
+   "id": "P-20",
+   "by": "Codex",
+   "text": "P-20: Binding owner input supersedes in-flight replies; spent requests remain recorded, and the same hit repeats under updated context.",
+   "status": "standing",
+   "reason": null
+  },
+  {
+   "id": "P-21",
+   "by": "Codex",
+   "text": "P-21: Missing final scores select the best scored current-epoch candidate, or expose the latest version as unscored; predecessor scores are never inherited.",
+   "status": "standing",
+   "reason": null
+  },
+  {
+   "id": "P-22",
+   "by": "Codex",
+   "text": "P-22: All player calls use cancellable workers; API cancellation stops local waiting without promising remote cancellation or avoiding charges.",
+   "status": "standing",
+   "reason": null
+  },
+  {
+   "id": "P-23",
+   "by": "Codex",
+   "text": "P-23: Paused runners exit and release their lock; say resume queues intent, while resume launches continuation.",
+   "status": "standing",
+   "reason": null
+  },
+  {
+   "id": "P-24",
+   "by": "Codex",
+   "text": "P-24: Identical known model pairs are rejected; diversity overrides cover same-provider or unknown pairs only.",
+   "status": "standing",
+   "reason": null
+  }
+ ],
+ "disputes": [],
+ "current": null,
+ "status": "done",
+ "started_at": 1791897320386,
+ "finished_at": 1791897957361,
+ "event_id": 10
+}

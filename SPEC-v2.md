@@ -64,7 +64,10 @@ Implemented and tested without credentials:
 
 - A default mock rally completes ten hits; explicit `-n` changes the count.
 - Every player sees the phase, remaining count, and character limit.
-- Budget multipliers are open 1.6x / deepen 1.3x / close 1.0x of incoming length.
+- Budget multipliers are open 1.6x / deepen 1.3x / close 1.0x of incoming length,
+  bounded by one non-compounding ceiling of five times the served version, so the
+  allowance cannot ratchet with the hit count. A draft already at the ceiling is held
+  at its current length rather than asked to shrink.
   The first draft uses at least 120 input characters as its budget base.
 - An oversized version gets exactly one rewrite attempt. Remaining overage is flagged
   in state and in `final.md`; size repair does not count as a player fault.
@@ -107,18 +110,24 @@ Acceptance:
 
 ## Remaining slices
 
-- **Length budgets (#6): partial.** Current limits and one rewrite are tested. A `let`
-  event, any revised tolerance, and paid live acceptance measurements remain outstanding.
-  Current behavior retries an overage in any phase; it does not guarantee convergence.
-- **Retry handling (#7): partial.** Unparsed faults, a JSON reminder, and one five-second
-  backoff are implemented. The issue also mentions a 20-second delay while allowing
-  only one retry; resolve this before changing retry count or closing the issue.
+- **Length budgets (#6): done.** Phase limits, one rewrite, and a non-compounding
+  ceiling of five times the served version are implemented and tested, and the live
+  measurements that set that number are in `docs/evidence/live-validation-2026-10-13.md`.
+  Live players fill the allowance rather than treat it as a cap, so the ceiling - not a
+  wider tolerance - is what prevents runaway growth. Behavior still retries an overage
+  in any phase and still does not guarantee convergence; a `let` event was not added.
+- **Retry handling (#7): done.** Unparsed faults, a JSON reminder, and one five-second
+  backoff are implemented and tested. The issue's second 20-second delay was superseded
+  by the owner's 2026-10-11 reconciliation as conflicting with one retry; the issue is
+  closed. Do not reintroduce a second retry delay without a new owner request.
 - **Lifecycle unification (#23): implemented.** New and resumed runs share one
   execution and finalization path, a loaded rally has an explicit constructor, the
   per-hit request policy is one operation, and the unused duration average is gone.
   Externally observable behavior is unchanged except that `final.md` now names an
   engine error. Tested in `tests/test_lifecycle.py`.
-- **Wall-clock budget (#8): planned.** Bound elapsed time and stop with a partial artifact.
+- **Wall-clock budget (#8): deferred on evidence.** The live runs' longest rally was
+  10.6 minutes of model time, with a 282-second worst hit, and existing cancellation
+  already leaves a usable artifact. Add a timer only if a future run shows otherwise.
 - **Owner inbox (#11): done.** Persistent prompt notes, `note`, sequence-ordered
   queueing, and exactly-once delivery across interruption and resume are implemented.
   The owner decision rules out automatic note-to-ledger conversion and phase pauses;
@@ -138,10 +147,17 @@ Acceptance:
 
 ## Live validation
 
-After ledger and length-budget work, rerun the recorded four-hit dogfood idea with
-Claude/Codex and store evidence under `docs/evidence/`. Compare median line retention
-with the 0–1% baseline and compare final length with hit 3. A second eight-hit run should
-inform multiplier defaults. Do not claim measured improvement from mock tests.
+Done on 2026-10-13 (#24): four rallies on `cli:claude` then `cli:codex` - the recorded
+four-hit dogfood idea, a one-sentence idea over ten hits, a brief with three seeded
+`O-*` non-negotiables, and a brief demanding Finnish, under 400 words, bullets only.
+Results and limitations are in `docs/evidence/live-validation-2026-10-13.md`; the older
+files there remain the historical baseline.
+
+Line retention was dropped as a quality measure rather than compared: `lines_kept` read
+0.0 on hits whose own changes preserved every decision, so at these document sizes it
+measures reflowing, not retention. Semantic preservation was judged by reading the
+outputs. No measured improvement over the baseline is claimed from one pair of runs, and
+nothing here was concluded from mock tests.
 
 ## Scope cuts
 

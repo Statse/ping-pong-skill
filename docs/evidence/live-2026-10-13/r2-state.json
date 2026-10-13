@@ -1,0 +1,573 @@
+{
+ "idea": "A pocket habit tracker that only ever asks you one question a day.",
+ "iterations": 10,
+ "players": [
+  {
+   "spec": "cli:claude",
+   "label": "Claude Code"
+  },
+  {
+   "spec": "cli:codex",
+   "label": "Codex"
+  }
+ ],
+ "hits": [
+  {
+   "n": 1,
+   "side": 0,
+   "player": "Claude Code",
+   "seconds": 10.9,
+   "critique": "This is the opening serve, so there is no earlier version to critique. The brief's hook is strong: one question a day. It leaves several things open. Can the question cover several habits, or only one? Is the answer yes/no or a scale? When does it ask? What happens when you miss a day? 'Pocket' suggests a phone or a small device, but the brief doesn't say which.",
+   "version": "A pocket habit tracker that asks one yes/no question a day, at a time you choose, about the one habit you're building. Answer in one tap; history is a dot grid. No nags or streak guilt.",
+   "changes": [
+    "Limited it to one habit at a time so 'one question' stays honest",
+    "Made the answer yes/no and one tap",
+    "Let the user choose the daily time",
+    "Shows history as a dot grid",
+    "No nagging or streak guilt, so a missed day is just a blank"
+   ],
+   "open_questions": [
+    "Should the tracker allow more than one habit, with the daily question rotating between them?",
+    "Is 'pocket' a phone app, a widget, or a separate small device?",
+    "Can you answer a question you missed later, or does it expire?"
+   ],
+   "owner_conflicts": [],
+   "decisions": [
+    {
+     "op": "add",
+     "id": "",
+     "text": "P-1: One question a day, always yes/no, answered in one tap",
+     "reason": ""
+    },
+    {
+     "op": "add",
+     "id": "",
+     "text": "P-2: Tracks one habit at a time",
+     "reason": ""
+    },
+    {
+     "op": "add",
+     "id": "",
+     "text": "P-3: No nagging or streak-loss guilt; a missed day is just a blank",
+     "reason": ""
+    }
+   ],
+   "parsed": true,
+   "phase": "open",
+   "size_budget": 192,
+   "over_budget": false,
+   "lines_kept": null,
+   "size_ratio": null
+  },
+  {
+   "n": 2,
+   "side": 1,
+   "player": "Codex",
+   "seconds": 22.0,
+   "critique": "The low-friction loop is strong, but the question needs a concrete success criterion. 'No nags' also leaves unclear whether the chosen daily prompt repeats. Make it one optional prompt, with blanks distinct from no answers.",
+   "version": "A pocket habit tracker for one habit at a time. Define what counts as done; it asks “Did you do it today?” once daily at your chosen time. Tap yes or no. A dot grid shows yes, no and missed days as blanks. One optional daily prompt, no reminders or streak guilt.",
+   "changes": [
+    "Made the habit's success criterion explicit",
+    "Clarified that the daily prompt is optional and never repeats",
+    "Distinguished missed days from no answers in the dot grid"
+   ],
+   "open_questions": [
+    "Should the chosen time mark the end of your day, or can you answer later?"
+   ],
+   "owner_conflicts": [],
+   "decisions": [
+    {
+     "op": "add",
+     "id": "",
+     "text": "P-4: The user defines what counts as completing the habit.",
+     "reason": ""
+    },
+    {
+     "op": "add",
+     "id": "",
+     "text": "P-5: The daily prompt is optional and never followed by reminders.",
+     "reason": ""
+    },
+    {
+     "op": "add",
+     "id": "",
+     "text": "P-6: A dot grid distinguishes yes, no and unanswered days.",
+     "reason": ""
+    }
+   ],
+   "parsed": true,
+   "phase": "open",
+   "size_budget": 296,
+   "over_budget": false,
+   "lines_kept": 0.0,
+   "size_ratio": 1.42
+  },
+  {
+   "n": 3,
+   "side": 0,
+   "player": "Claude Code",
+   "seconds": 16.6,
+   "critique": "The core loop is solid, but the wording has a contradiction. It says the app 'asks once daily' and then also mentions 'one optional daily prompt', which reads like two prompts. It also doesn't say what happens if you ignore the prompt: can you still answer later, or is that day locked? It never says where the tap happens. For a 'pocket' tracker that matters most: if you have to open the app, it's more than one tap. And it doesn't say what happens to your history when you switch to a new habit. With only one habit at a time, that will happen sooner or later.",
+   "version": "A pocket habit tracker for one habit at a time. You define what counts as done. Once a day, at a time you choose, one silent notification asks “Did you [habit] today?” Tap yes or no on the notification or widget, without opening the app. Miss it and you can answer until midnight; after that the day stays blank. A dot grid shows yes, no and blank days. Switching habits archives the old grid. No reminders, no streaks.",
+   "changes": [
+    "Merged the two prompt mentions into one silent notification",
+    "Made yes/no answerable from the notification or widget, so it's truly one tap",
+    "Added an answer window that lasts until midnight before a day turns blank",
+    "Switching habits now archives the old grid instead of leaving it unclear",
+    "Put the user's habit into the question wording"
+   ],
+   "open_questions": [
+    "Should you be able to correct yesterday's answer, or is each day final at midnight?",
+    "Can you look back at archived habit grids or restore one later?",
+    "Does the app show any summary (such as a yes rate), or only the dot grid?"
+   ],
+   "owner_conflicts": [],
+   "decisions": [
+    {
+     "op": "add",
+     "id": "",
+     "text": "P-7: You answer from the notification or widget without opening the app",
+     "reason": ""
+    },
+    {
+     "op": "add",
+     "id": "",
+     "text": "P-8: You can answer a day's question until midnight; after that the day stays blank",
+     "reason": ""
+    },
+    {
+     "op": "add",
+     "id": "",
+     "text": "P-9: Switching to a new habit archives the previous habit's grid",
+     "reason": ""
+    }
+   ],
+   "parsed": true,
+   "phase": "open",
+   "size_budget": 419,
+   "over_budget": false,
+   "lines_kept": 0.0,
+   "size_ratio": 1.6
+  },
+  {
+   "n": 4,
+   "side": 1,
+   "player": "Codex",
+   "seconds": 21.1,
+   "critique": "The one-tap loop and archived history are clear. The notification is no longer explicitly optional, midnight lacks a timezone, and switching habits mid-day could introduce a second question.",
+   "version": "A pocket tracker for one habit at a time. You define what counts as done. Each day has one question: “Did you [habit] today?” Answer yes/no in one tap from a widget or an optional silent notification at your chosen time, without opening the app. Answer until local midnight; unanswered days then stay blank. A dot grid distinguishes yes, no and blank. Switching habits archives the old grid and starts the new habit tomorrow, avoiding a second question today. No follow-up reminders, no streaks, no guilt.",
+   "changes": [
+    "Restored the notification’s optional status.",
+    "Specified local midnight as the cutoff.",
+    "Made habit switches take effect tomorrow to preserve one question per day."
+   ],
+   "open_questions": [
+    "Should an answer be editable before midnight?"
+   ],
+   "owner_conflicts": [],
+   "decisions": [
+    {
+     "op": "add",
+     "id": "",
+     "text": "P-10: The daily answer window closes at local midnight.",
+     "reason": ""
+    },
+    {
+     "op": "add",
+     "id": "",
+     "text": "P-11: Switching habits starts the new habit tomorrow, preventing a second question today.",
+     "reason": ""
+    }
+   ],
+   "parsed": true,
+   "phase": "deepen",
+   "size_budget": 544,
+   "over_budget": false,
+   "lines_kept": 0.0,
+   "size_ratio": 1.21
+  },
+  {
+   "n": 5,
+   "side": 0,
+   "player": "Claude Code",
+   "seconds": 27.4,
+   "critique": "Codex's version is tight and covers the main loop. Three things are still loose. The user's definition of done is stored but never appears anywhere, so it can't keep the bar steady from day to day. A mis-tap has no fix, which matters when everything happens in one tap. And 'local midnight' doesn't say what happens to the cutoff when you travel.",
+   "version": "A pocket tracker for one habit at a time. You define what counts as done (e.g. “read 10 pages”); it shows under each day's single question: “Did you [habit] today?” Answer yes/no in one tap from a widget or an optional silent notification at your chosen time, without opening the app. Mis-tap? Tap the other answer; it can change until midnight in the phone's current time zone. Then the day locks; unanswered stays blank. A dot grid shows yes, no and blank. Switching habits archives the old grid and starts the new one tomorrow, so there's never a second question today. No follow-up reminders, no streaks, no guilt.",
+   "changes": [
+    "The user's definition of done now appears under the daily question",
+    "Answers can be changed until midnight; the day locks after that",
+    "Midnight now means midnight in the phone's current time zone",
+    "Cut the text to fit the character limit"
+   ],
+   "open_questions": [
+    "Should a locked day ever be editable, for example to fix a mistake noticed the next morning?",
+    "Can the user edit the definition of done partway through a habit, or does that count as switching habits?",
+    "If you travel west and midnight comes later, could that create a duplicate or extra-long day, and is that acceptable?"
+   ],
+   "owner_conflicts": [],
+   "decisions": [
+    {
+     "op": "add",
+     "id": "",
+     "text": "P-12: The user's definition of done is shown under the daily question.",
+     "reason": ""
+    },
+    {
+     "op": "add",
+     "id": "",
+     "text": "P-13: An answer can be changed until midnight, then the day locks.",
+     "reason": ""
+    },
+    {
+     "op": "add",
+     "id": "",
+     "text": "P-14: Local midnight means midnight in the phone's current time zone.",
+     "reason": ""
+    }
+   ],
+   "parsed": true,
+   "phase": "deepen",
+   "size_budget": 656,
+   "over_budget": false,
+   "lines_kept": 0.0,
+   "size_ratio": 1.22
+  },
+  {
+   "n": 6,
+   "side": 1,
+   "player": "Codex",
+   "seconds": 21.8,
+   "critique": "The core loop is concrete and restrained. Travel still creates a loophole: moving the clock backward could reopen a locked day. Old notifications also need a rule so late taps cannot record an answer for the wrong day.",
+   "version": "A pocket tracker for one habit at a time. You define done (e.g. “read 10 pages”); that definition appears under the day's single question: “Did you [habit] today?” Answer yes/no in one tap from a widget or an optional silent notification at your chosen time, without opening the app. Change a mis-tap until midnight in the phone's current time zone; then the day locks and unanswered stays blank. Locked days never reopen, even after travel; returning to a date reuses its question, never creates another. Expired notifications cannot record answers. A dot grid distinguishes yes, no and blank. Switching habits archives the old grid and starts the new habit tomorrow. No follow-up reminders, no streaks, no guilt.",
+   "changes": [
+    "Locked days stay locked after time-zone changes.",
+    "Returning to a calendar date reuses its existing question.",
+    "Expired notifications cannot submit answers."
+   ],
+   "open_questions": [],
+   "owner_conflicts": [],
+   "decisions": [
+    {
+     "op": "add",
+     "id": "",
+     "text": "Locked days never reopen after time-zone changes; revisiting a date reuses its existing question.",
+     "reason": ""
+    },
+    {
+     "op": "add",
+     "id": "",
+     "text": "Expired notifications cannot record or change answers.",
+     "reason": ""
+    }
+   ],
+   "parsed": true,
+   "phase": "deepen",
+   "size_budget": 803,
+   "over_budget": false,
+   "lines_kept": 0.0,
+   "size_ratio": 1.16
+  },
+  {
+   "n": 7,
+   "side": 0,
+   "player": "Claude Code",
+   "seconds": 15.5,
+   "critique": "The loop and the edge-case rules are solid now. Three gaps remain. First, the definition of done can apparently be edited at any time, so you could quietly loosen 'read 10 pages' to 'read 1 page' and the old yes dots would then mean something different. Second, the dot grid's look and range are undefined, as are what an archived grid lets you do and where the data lives. Third, nothing says what the widget shows once you've answered, so you could tap it again by accident and not know whether your answer was saved.",
+   "version": "A pocket tracker for one habit at a time. You define done (e.g. “read 10 pages”), and it appears under the day's single question: “Did you [habit] today?” Answer yes/no in one tap from a widget or an optional silent notification at a time you choose, without opening the app. Change a mis-tap until midnight in the phone's current time zone. Then the day locks, and an unanswered day stays blank. Locked days never reopen, even after travel, and a revisited date reuses its question. Expired notifications can't record answers. Once you answer, the widget shows that day's dot. A dot grid shows recent weeks: yes is filled, no is hollow and unanswered is empty. The definition of done is fixed: rewording it counts as switching habits, which archives the old grid as read-only and starts the new habit tomorrow. Data stays on the phone, with no account. No follow-up reminders, no streaks, no guilt.",
+   "changes": [
+    "Definition of done is fixed; rewording it counts as a habit switch",
+    "Defined how the dot grid shows yes, no and unanswered",
+    "Archived grids are read-only",
+    "The widget shows that day's dot once you answer",
+    "Data stays on the phone, no account"
+   ],
+   "open_questions": [
+    "Should night owls get an optional later cutoff (e.g. 3am) instead of a strict local midnight?",
+    "How far back should the grid show: weeks, months or the full history?",
+    "Should archived habits be restartable, continuing their old grid?"
+   ],
+   "owner_conflicts": [],
+   "decisions": [
+    {
+     "op": "add",
+     "id": "",
+     "text": "P-17: The definition of done is fixed; rewording it counts as switching habits (archive old grid, new habit starts tomorrow).",
+     "reason": ""
+    },
+    {
+     "op": "add",
+     "id": "",
+     "text": "P-18: Dot grid shows yes as filled, no as hollow and unanswered as empty; archived grids are read-only.",
+     "reason": ""
+    },
+    {
+     "op": "add",
+     "id": "",
+     "text": "P-19: Once you answer, the widget shows that day's dot.",
+     "reason": ""
+    },
+    {
+     "op": "add",
+     "id": "",
+     "text": "P-20: Data is stored only on the phone; no account.",
+     "reason": ""
+    }
+   ],
+   "parsed": true,
+   "phase": "deepen",
+   "size_budget": 928,
+   "over_budget": false,
+   "lines_kept": 0.0,
+   "size_ratio": 1.26
+  },
+  {
+   "n": 8,
+   "side": 1,
+   "player": "Codex",
+   "seconds": 21.4,
+   "critique": "The idea is coherent, but showing only a dot after answering leaves correction unclear. The closing version should connect that dot to the existing edit window and make expired-notification protection cover changes as well as first answers.",
+   "version": "A pocket tracker for one habit at a time. Define done (e.g. “read 10 pages”); it appears under the day's only question: “Did you [habit] today?” Tap yes/no in a widget or one optional silent notification at your chosen time, without opening the app. After answering, the widget shows today's dot; tap it to correct your answer until midnight in the phone's current time zone. Then the day locks; unanswered stays blank. Travel never reopens locked days; revisiting a date reuses its question. Expired notifications cannot save or change answers. The recent-weeks grid shows yes as filled, no as hollow, unanswered as empty. Done is fixed: rewording it or switching habits archives the old grid as read-only; the new habit starts tomorrow, with no second question today. Data stays only on your phone; no account. No follow-up reminders, streaks or guilt.",
+   "changes": [
+    "Made the widget's answered dot the entry point for corrections.",
+    "Explicitly barred expired notifications from changing answers.",
+    "Reinforced that switching cannot create a second question today."
+   ],
+   "open_questions": [],
+   "owner_conflicts": [],
+   "decisions": [
+    {
+     "op": "add",
+     "id": "",
+     "text": "Tapping today's answered dot in the widget allows correction until the day locks.",
+     "reason": ""
+    }
+   ],
+   "parsed": true,
+   "phase": "close",
+   "size_budget": 899,
+   "over_budget": false,
+   "lines_kept": 0.0,
+   "size_ratio": 0.95
+  },
+  {
+   "n": 9,
+   "side": 0,
+   "player": "Claude Code",
+   "seconds": 16.0,
+   "critique": "The design is consistent and complete. A few things are still unclear. 'Tap it to correct' doesn't say what the tap does: does it flip the answer or bring the question back? A blind toggle could change the answer by accident. 'Revisiting a date reuses its question' is internal wording that a reader can't picture. The sentence starting 'Tap yes/no in a widget or one optional silent notification' tries to say too much. 'With no second question today' repeats what 'starts tomorrow' already says. No new features are needed, only clearer wording.",
+   "version": "A pocket tracker for one habit at a time. You define done (e.g. “read 10 pages”); it sits under the day's only question: “Did you [habit] today?” Answer yes or no in one tap from a widget or one optional silent notification at your chosen time, without opening the app. Once answered, the widget shows today's dot; tapping it brings back yes/no to correct it until midnight in the phone's current time zone. Then the day locks; an unanswered day stays blank. Time-zone changes never reopen locked days or re-ask a date. Expired notifications can't save or change answers. A recent-weeks grid shows yes filled, no hollow, unanswered empty. Done is fixed: rewording it or switching habits archives the old grid read-only, and the new habit starts tomorrow. Data stays only on your phone; no account. No follow-up reminders, streaks or guilt.",
+   "changes": [
+    "Tapping the widget's dot now brings back yes/no instead of flipping the answer with no warning",
+    "Replaced 'revisiting a date reuses its question' with plain wording: time-zone changes never re-ask a date",
+    "Split the answer sentence so it reads more easily and made 'one tap' explicit",
+    "Removed 'no second question today' because 'starts tomorrow' already says it"
+   ],
+   "open_questions": [
+    "Should the archived grids from earlier habits be visible anywhere in the widget, or only inside the app?"
+   ],
+   "owner_conflicts": [],
+   "decisions": [
+    {
+     "op": "add",
+     "id": "",
+     "text": "P-22: Tapping today's answered dot brings back the yes/no choice; it never flips the answer by itself.",
+     "reason": ""
+    }
+   ],
+   "parsed": true,
+   "phase": "close",
+   "size_budget": 854,
+   "over_budget": false,
+   "lines_kept": 0.0,
+   "size_ratio": 0.98
+  },
+  {
+   "n": 10,
+   "side": 1,
+   "player": "Codex",
+   "seconds": 21.2,
+   "critique": "The design is settled. “Never re-ask a date” conflicts with reopening yes/no for corrections; the rule should prohibit a new question while allowing edits to the existing answer. Everything else earns its place.",
+   "version": "A pocket tracker for one habit at a time. You define done (e.g. “read 10 pages”), shown beneath the day's only question: “Did you [habit] today?” Answer yes/no in one tap from a widget or an optional silent notification at your chosen time. No app opening needed. After answering, the widget shows today's dot; tapping it opens yes/no for correction, never flips it. At midnight in the phone's current time zone, the day locks; unanswered stays blank. Time-zone changes never reopen locked days or create another question for an existing date. Expired notifications can't save edits. A recent-weeks grid shows yes filled, no hollow, unanswered empty. Switching habits or rewording done archives the old grid read-only; the new habit starts tomorrow. Data stays on your phone; no account, follow-up reminders, streaks or guilt.",
+   "changes": [
+    "Distinguished reopening an answer from creating another question.",
+    "Made the no-blind-toggle behavior explicit.",
+    "Tightened wording while preserving all decisions."
+   ],
+   "open_questions": [],
+   "owner_conflicts": [],
+   "decisions": [],
+   "parsed": true,
+   "phase": "close",
+   "size_budget": 839,
+   "over_budget": false,
+   "lines_kept": 0.0,
+   "size_ratio": 0.98
+  }
+ ],
+ "faults": [],
+ "owner_notes": [],
+ "consumed_notes": [],
+ "next_side": 0,
+ "ledger": [
+  {
+   "id": "P-1",
+   "by": "Claude Code",
+   "text": "P-1: One question a day, always yes/no, answered in one tap",
+   "status": "standing",
+   "reason": null
+  },
+  {
+   "id": "P-2",
+   "by": "Claude Code",
+   "text": "P-2: Tracks one habit at a time",
+   "status": "standing",
+   "reason": null
+  },
+  {
+   "id": "P-3",
+   "by": "Claude Code",
+   "text": "P-3: No nagging or streak-loss guilt; a missed day is just a blank",
+   "status": "standing",
+   "reason": null
+  },
+  {
+   "id": "P-4",
+   "by": "Codex",
+   "text": "P-4: The user defines what counts as completing the habit.",
+   "status": "standing",
+   "reason": null
+  },
+  {
+   "id": "P-5",
+   "by": "Codex",
+   "text": "P-5: The daily prompt is optional and never followed by reminders.",
+   "status": "standing",
+   "reason": null
+  },
+  {
+   "id": "P-6",
+   "by": "Codex",
+   "text": "P-6: A dot grid distinguishes yes, no and unanswered days.",
+   "status": "standing",
+   "reason": null
+  },
+  {
+   "id": "P-7",
+   "by": "Claude Code",
+   "text": "P-7: You answer from the notification or widget without opening the app",
+   "status": "standing",
+   "reason": null
+  },
+  {
+   "id": "P-8",
+   "by": "Claude Code",
+   "text": "P-8: You can answer a day's question until midnight; after that the day stays blank",
+   "status": "standing",
+   "reason": null
+  },
+  {
+   "id": "P-9",
+   "by": "Claude Code",
+   "text": "P-9: Switching to a new habit archives the previous habit's grid",
+   "status": "standing",
+   "reason": null
+  },
+  {
+   "id": "P-10",
+   "by": "Codex",
+   "text": "P-10: The daily answer window closes at local midnight.",
+   "status": "standing",
+   "reason": null
+  },
+  {
+   "id": "P-11",
+   "by": "Codex",
+   "text": "P-11: Switching habits starts the new habit tomorrow, preventing a second question today.",
+   "status": "standing",
+   "reason": null
+  },
+  {
+   "id": "P-12",
+   "by": "Claude Code",
+   "text": "P-12: The user's definition of done is shown under the daily question.",
+   "status": "standing",
+   "reason": null
+  },
+  {
+   "id": "P-13",
+   "by": "Claude Code",
+   "text": "P-13: An answer can be changed until midnight, then the day locks.",
+   "status": "standing",
+   "reason": null
+  },
+  {
+   "id": "P-14",
+   "by": "Claude Code",
+   "text": "P-14: Local midnight means midnight in the phone's current time zone.",
+   "status": "standing",
+   "reason": null
+  },
+  {
+   "id": "P-15",
+   "by": "Codex",
+   "text": "Locked days never reopen after time-zone changes; revisiting a date reuses its existing question.",
+   "status": "standing",
+   "reason": null
+  },
+  {
+   "id": "P-16",
+   "by": "Codex",
+   "text": "Expired notifications cannot record or change answers.",
+   "status": "standing",
+   "reason": null
+  },
+  {
+   "id": "P-17",
+   "by": "Claude Code",
+   "text": "P-17: The definition of done is fixed; rewording it counts as switching habits (archive old grid, new habit starts tomorrow).",
+   "status": "standing",
+   "reason": null
+  },
+  {
+   "id": "P-18",
+   "by": "Claude Code",
+   "text": "P-18: Dot grid shows yes as filled, no as hollow and unanswered as empty; archived grids are read-only.",
+   "status": "standing",
+   "reason": null
+  },
+  {
+   "id": "P-19",
+   "by": "Claude Code",
+   "text": "P-19: Once you answer, the widget shows that day's dot.",
+   "status": "standing",
+   "reason": null
+  },
+  {
+   "id": "P-20",
+   "by": "Claude Code",
+   "text": "P-20: Data is stored only on the phone; no account.",
+   "status": "standing",
+   "reason": null
+  },
+  {
+   "id": "P-21",
+   "by": "Codex",
+   "text": "Tapping today's answered dot in the widget allows correction until the day locks.",
+   "status": "standing",
+   "reason": null
+  },
+  {
+   "id": "P-22",
+   "by": "Claude Code",
+   "text": "P-22: Tapping today's answered dot brings back the yes/no choice; it never flips the answer by itself.",
+   "status": "standing",
+   "reason": null
+  }
+ ],
+ "disputes": [],
+ "current": null,
+ "status": "done",
+ "started_at": 1791897350583,
+ "finished_at": 1791897544729,
+ "event_id": 21
+}

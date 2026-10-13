@@ -24,8 +24,10 @@ motion is respected. Native host adapters remain deferred. See `ping-pong/DISPLA
 - Atomic state writes followed by ordered append-only events; plain `status` and `wait`.
 - Drift metrics `lines_kept` and `size_ratio` on each hit (null on the serve).
 - Default 10 hits, phase-scaled prompts, and remaining-hit count.
-- Character budgets: open 1.6x, deepen 1.3x, close 1.0x. One rewrite on overage;
-  accept and flag remaining overage. This is not a strict size guarantee.
+- Character budgets: open 1.6x, deepen 1.3x, close 1.0x against the incoming draft,
+  plus one non-compounding ceiling of `GROWTH_CEILING` (5) times the served version
+  (#6). One rewrite on overage; accept and flag remaining overage. This is not a
+  strict size guarantee. A draft already at the ceiling is held, never shrunk.
 - Unparsed replies are faults. One retry after five seconds, with a JSON reminder;
   opponent covers the hit after failure. Two consecutive faults stop the rally.
 - Fatal token/context, authentication, model, and missing-tool errors stop immediately.
@@ -99,6 +101,7 @@ motion is respected. Native host adapters remain deferred. See `ping-pong/DISPLA
   and hit count, and splits the last hit's open questions from questions earlier hits
   stopped asking. The engine never decides a question is answered; the host checks the
   earlier group against the final version, the owner notes and the ledger.
+- Contended publishes retry on Windows (#31). See the durability note below.
 - Resume keeps completed hits and event IDs. An OS lock prevents simultaneous engines
   writing the same rally. OS locks release automatically when an engine exits or dies.
 - Cancellation and faults leave a usable `final.md`, even before the first completed hit.
@@ -129,22 +132,49 @@ notes) is now implemented: the owner's rewritten issue scopes it to exactly-once
 delivery and ordering, and explicitly rules out automatic note-to-ledger conversion and
 phase pauses, so `O-*` entries still come from `constraints.md` only. The ledger records
 and reports lost requirements; it still does not force a player to keep text in its
-version. #6 (budgets) and #7 (retry handling) remain partial; keep their remaining
-acceptance criteria explicit. The second retry delay mentioned in #7 requires resolving
-its conflict with one retry. The Windows note-ordering CI failure was reproduced locally
+version. #6 is now closed on live evidence (see below). #7 (retry handling) is closed too: the
+owner's 2026-10-11 reconciliation superseded its second 20-second delay as conflicting
+with one retry, and the implemented behavior - one retry after five seconds, then
+opponent coverage - already satisfies it. Do not reopen that delay. The live runs argue
+the same way for size rewrites: one rewrite recovered about 10% on a large document, so
+a second would not close a 26% gap and would double the slowest hit in the set. The Windows note-ordering CI failure was reproduced locally
 with a frozen clock and fixed, and the full matrix (Ubuntu, macOS, Windows on 3.9 and
-3.12) is now green on main. #12, #21, #22 and #23 are implemented and merged; the open
-work is #24 (validate outcome quality), #6, #7 and #8. Read #24 before picking the next
-slice: it gates expanding budgets or decision tracking on a live rally's evidence.
+3.12) is now green on main. #12, #21, #22 and #23 are implemented and merged. #24, #6 and #31 are
+implemented on this branch. With those merged, no issue carries unfinished
+implementation work: #7 is closed as superseded, #8 stays deferred on measured run
+times, and #1 is the umbrella that closes with them. Read
+`docs/evidence/live-validation-2026-10-13.md` before touching budgets or the ledger:
+it is the live evidence that gated them, and it records what the numbers do not show.
 
-Atomic state writes are not yet proven under a concurrent Windows reader: one CI job hit
-`WinError 5` renaming `state.json.tmp` over `state.json` while the `wait` CLI held the
-file open, and passed on re-run. Windows refuses a rename over an open handle, so this
-is a real durability gap, not only test flake.
+Atomic publishes now survive a concurrent reader (#31). Windows refuses `os.replace`
+over a destination another process holds open, so one CI job hit `WinError 5` renaming
+`state.json.tmp` over `state.json` while the `wait` CLI was reading it. Every staged
+publish - state revisions, the active-rally pointer, and a queued owner note - goes
+through `publish()`, which retries `PermissionError` up to 20 times at 50 ms, then
+raises one clear error naming the destination and the elapsed bound. The same staged
+file is republished each attempt, so a reader still sees a whole revision or the old
+one; the event is appended only after the state lands, so a denied publish leaves no
+event claiming it happened. Residual limit: a reader that holds the file longer than
+the one-second bound still fails the publish, now as a reported engine error rather
+than a crash mid-rename.
 
-No paid live dogfood rally was run during recovery. Keep `docs/evidence/` as the historical
-baseline; a live rerun is required to demonstrate improved retention and convergence.
-Time budgets remain planned. Question triage (#12) was replaced by the
+Four live rallies ran on 2026-10-13 on the default `cli:claude` then `cli:codex` pair
+(#24): the historical four-hit dogfood brief, a one-sentence idea over ten hits, a brief
+with three seeded `O-*` non-negotiables, and a brief demanding Finnish, under 400 words,
+bullets only. All four finished without a fault. Findings, with limitations, are in
+`docs/evidence/live-validation-2026-10-13.md`; the older files in `docs/evidence/` remain
+the historical baseline. The load-bearing results: players fill the per-hit budget rather
+than treat it as a cap, which is why #6 became a ceiling rather than a wider allowance;
+the requested form, language and length were honored at every layer; seeded owner entries
+plus the conflict report stopped two attempts to design a non-negotiable away; player
+ledger entries accumulate toward the 25-entry render cap without consolidating (24 in
+four hits, 22 for an 826-character idea), so the next ledger change should be
+consolidation or a lower cap for `P-*` only, decided on its own evidence; and `lines_kept`
+read 0.0 on hits that demonstrably preserved content, so it measures formatting at these
+sizes and is not a retention score. No improvement over the historical baseline is
+claimed from one pair of runs. #8 stays deferred: the longest run was 10.6 minutes of
+model time and nothing showed existing cancellation to be insufficient. Question triage
+(#12) was replaced by the
 one-outcome contract above; do not add answered/kept/dropped groups. A players adapter table, cached
 probe product, deterministic shape schema, and richer display panels were scope cuts;
 do not resurrect them from the old proposal. The API transports and the extra CLI
@@ -153,7 +183,7 @@ players are gone (#21); do not reintroduce them, and do not add an adapter regis
 ## Validation and agent coordination
 
 Run `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v`.
-The suite is 117 credential-free tests: a real four-hit mock rally, event monitoring,
+The suite is 123 credential-free tests: a real four-hit mock rally, event monitoring,
 parser fixtures, process cleanup, animation preferences, budgets, note delivery and
 durability, resume, and locking; the decision ledger (seeding, cap rendering, disputes,
 final output, resume delivery); the lifecycle contracts in `tests/test_lifecycle.py`
