@@ -99,6 +99,7 @@ motion is respected. Native host adapters remain deferred. See `ping-pong/DISPLA
   and hit count, and splits the last hit's open questions from questions earlier hits
   stopped asking. The engine never decides a question is answered; the host checks the
   earlier group against the final version, the owner notes and the ledger.
+- Contended publishes retry on Windows (#31). See the durability note below.
 - Resume keeps completed hits and event IDs. An OS lock prevents simultaneous engines
   writing the same rally. OS locks release automatically when an engine exits or dies.
 - Cancellation and faults leave a usable `final.md`, even before the first completed hit.
@@ -137,10 +138,17 @@ with a frozen clock and fixed, and the full matrix (Ubuntu, macOS, Windows on 3.
 work is #24 (validate outcome quality), #6, #7 and #8. Read #24 before picking the next
 slice: it gates expanding budgets or decision tracking on a live rally's evidence.
 
-Atomic state writes are not yet proven under a concurrent Windows reader: one CI job hit
-`WinError 5` renaming `state.json.tmp` over `state.json` while the `wait` CLI held the
-file open, and passed on re-run. Windows refuses a rename over an open handle, so this
-is a real durability gap, not only test flake.
+Atomic publishes now survive a concurrent reader (#31). Windows refuses `os.replace`
+over a destination another process holds open, so one CI job hit `WinError 5` renaming
+`state.json.tmp` over `state.json` while the `wait` CLI was reading it. Every staged
+publish - state revisions, the active-rally pointer, and a queued owner note - goes
+through `publish()`, which retries `PermissionError` up to 20 times at 50 ms, then
+raises one clear error naming the destination and the elapsed bound. The same staged
+file is republished each attempt, so a reader still sees a whole revision or the old
+one; the event is appended only after the state lands, so a denied publish leaves no
+event claiming it happened. Residual limit: a reader that holds the file longer than
+the one-second bound still fails the publish, now as a reported engine error rather
+than a crash mid-rename.
 
 No paid live dogfood rally was run during recovery. Keep `docs/evidence/` as the historical
 baseline; a live rerun is required to demonstrate improved retention and convergence.
@@ -153,7 +161,7 @@ players are gone (#21); do not reintroduce them, and do not add an adapter regis
 ## Validation and agent coordination
 
 Run `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v`.
-The suite is 117 credential-free tests: a real four-hit mock rally, event monitoring,
+The suite is 121 credential-free tests: a real four-hit mock rally, event monitoring,
 parser fixtures, process cleanup, animation preferences, budgets, note delivery and
 durability, resume, and locking; the decision ledger (seeding, cap rendering, disputes,
 final output, resume delivery); the lifecycle contracts in `tests/test_lifecycle.py`
